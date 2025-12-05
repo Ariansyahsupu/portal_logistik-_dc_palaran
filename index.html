@@ -1,0 +1,1249 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Palm Broomstick Export Management Hub</title>
+    
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    
+    <!-- React & ReactDOM (CDNJS) -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js" crossorigin="anonymous" referrerpolicy="no-referrer"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js" crossorigin="anonymous" referrerpolicy="no-referrer"></script>
+    
+    <!-- Prop-Types (Required for Recharts UMD) -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/prop-types/15.8.1/prop-types.min.js" crossorigin="anonymous" referrerpolicy="no-referrer"></script>
+    
+    <!-- Babel for JSX -->
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    
+    <!-- Recharts -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/recharts/2.12.0/Recharts.min.js" crossorigin="anonymous" referrerpolicy="no-referrer"></script>
+    
+    <style>
+        /* Custom Animations */
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateY(10px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+        .animate-fadeIn {
+            animation: fadeIn 0.5s ease-out forwards;
+        }
+        
+        /* Scrollbar Styling */
+        ::-webkit-scrollbar {
+            width: 8px;
+            height: 8px;
+        }
+        ::-webkit-scrollbar-track {
+            background: #f1f5f9; 
+        }
+        ::-webkit-scrollbar-thumb {
+            background: #cbd5e1; 
+            border-radius: 4px;
+        }
+        ::-webkit-scrollbar-thumb:hover {
+            background: #94a3b8; 
+        }
+    </style>
+</head>
+<body class="bg-slate-100 text-slate-900">
+    <div id="root"></div>
+
+    <script type="text/babel">
+        // --- Global Destructuring ---
+        const { useState, useMemo, useEffect } = React;
+        const { 
+            BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, 
+            Legend, ResponsiveContainer, LineChart, Line, PieChart, 
+            Pie, Cell 
+        } = window.Recharts || {};
+
+        // --- Inline Icons (Replaces Lucide Dependency to Fix Errors) ---
+        const createIcon = (path) => ({ size = 24, className = "", ...props }) => (
+            <svg 
+                xmlns="http://www.w3.org/2000/svg" 
+                width={size} 
+                height={size} 
+                viewBox="0 0 24 24" 
+                fill="none" 
+                stroke="currentColor" 
+                strokeWidth="2" 
+                strokeLinecap="round" 
+                strokeLinejoin="round" 
+                className={className} 
+                {...props}
+            >
+                {path}
+            </svg>
+        );
+
+        const Anchor = createIcon(<><circle cx="12" cy="5" r="3"/><line x1="12" x2="12" y1="22" y2="8"/><path d="M5 12H2a10 10 0 0 0 20 0h-3"/></>);
+        const Ship = createIcon(<><path d="M2 21c.6.5 1.2 1 2.5 1 2.5 0 2.5-2 5-2 1.3 0 1.9.5 2.5 1 .6.5 1.2 1 2.5 1 2.5 0 2.5-2 5-2 1.3 0 1.9.5 2.5 1"/><path d="M19.38 20A11.6 11.6 0 0 0 21 14l-9-4-9 4c0 2.9.9 5.8 2.2 8"/><path d="M5 14V4c0-1.1.9-2 2-2h10a2 2 0 0 1 2 2v10"/><path d="M12 2v13"/></>);
+        const TrendingUp = createIcon(<><polyline points="23 6 13.5 15.5 8.5 10.5 1 18"/><polyline points="17 6 23 6 23 12"/></>);
+        const Users = createIcon(<><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></>);
+        const Calculator = createIcon(<><rect width="16" height="20" x="4" y="2" rx="2"/><line x1="8" x2="16" y1="6" y2="6"/><line x1="16" x2="16" y1="14" y2="18"/><path d="M16 10h.01"/><path d="M12 10h.01"/><path d="M8 10h.01"/><path d="M12 14h.01"/><path d="M8 14h.01"/><path d="M12 18h.01"/><path d="M8 18h.01"/></>);
+        const Package = createIcon(<><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/><polyline points="3.27 6.96 12 12.01 20.73 6.96"/><line x1="12" y1="22.08" x2="12" y2="12"/></>);
+        const FileText = createIcon(<><path d="M14.5 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7.5L14.5 2z"/><polyline points="14 2 14 8 20 8"/><line x1="16" x2="8" y1="13" y2="13"/><line x1="16" x2="8" y1="17" y2="17"/><polyline points="10 9 9 9 8 9"/></>);
+        const Globe = createIcon(<><circle cx="12" cy="12" r="10"/><line x1="2" x2="22" y1="12" y2="12"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></>);
+        const DollarSign = createIcon(<><line x1="12" x2="12" y1="2" y2="22"/><path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/></>);
+        const Navigation = createIcon(<polygon points="3 11 22 2 13 21 11 13 3 11"/>);
+        const ChevronRight = createIcon(<path d="m9 18 6-6-6-6"/>);
+        const Info = createIcon(<><circle cx="12" cy="12" r="10"/><path d="M12 16v-4"/><path d="M12 8h.01"/></>);
+        const Truck = createIcon(<><path d="M10 17h4V5H2v12h3"/><path d="M20 17h2v-3.34a4 4 0 0 0-1.17-2.83L19 9h-5v8h1"/><circle cx="7.5" cy="17.5" r="2.5"/><circle cx="17.5" cy="17.5" r="2.5"/></>);
+        const Building2 = createIcon(<><path d="M6 22V4a2 2 0 0 1 2-2h8a2 2 0 0 1 2 2v18Z"/><path d="M6 12H4a2 2 0 0 0-2 2v6a2 2 0 0 0 2 2h2"/><path d="M18 9h2a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2h-2"/><path d="M10 6h4"/><path d="M10 10h4"/><path d="M10 14h4"/><path d="M10 18h4"/></>);
+        const Search = createIcon(<><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></>);
+        const Menu = createIcon(<><line x1="4" x2="20" y1="12" y2="12"/><line x1="4" x2="20" y1="6" y2="6"/><line x1="4" x2="20" y1="18" y2="18"/></>);
+        const X = createIcon(<><path d="M18 6 6 18"/><path d="m6 6 12 12"/></>);
+        const ArrowRight = createIcon(<><path d="M5 12h14"/><path d="m12 5 7 7-7 7"/></>);
+        const MapPin = createIcon(<><path d="M20 10c0 6-8 12-8 12s-8-6-8-12a8 8 0 0 1 16 0Z"/><circle cx="12" cy="10" r="3"/></>);
+        const Mail = createIcon(<><rect width="20" height="16" x="2" y="4" rx="2"/><path d="m22 7-8.97 5.7a1.94 1.94 0 0 1-2.06 0L2 7"/></>);
+        const Phone = createIcon(<><path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72 12.84 12.84 0 0 0 .7 2.81 2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45 12.84 12.84 0 0 0 2.81.7A2 2 0 0 1 22 16.92z"/></>);
+        const Briefcase = createIcon(<><rect width="20" height="14" x="2" y="7" rx="2" ry="2"/><path d="M16 21V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v16"/></>);
+
+        // --- Constants & Data ---
+
+        const EXCHANGE_RATE_DEFAULT = 16500;
+
+        const DESTINATIONS = [
+            { country: 'India', duty: 0.92, freight: 1200, port: 'Nhava Sheva' },
+            { country: 'Pakistan', duty: 0.20, freight: 1300, port: 'Karachi' },
+            { country: 'China', duty: 0.05, freight: 800, port: 'Shanghai' },
+            { country: 'Bangladesh', duty: 0.31, freight: 1100, port: 'Chittagong' },
+            { country: 'Saudi Arabia', duty: 0.05, freight: 1800, port: 'Jeddah' },
+        ];
+
+        const BUYERS = [
+            { id: 1, name: 'Shree Lakshmi Broom Industries', country: 'India', city: 'Mumbai', type: 'Manufacturer', email: 'procurement@shreelakshmi.in', phone: '+91 22 4567 8900', demand: '200 MT/mo', terms: 'LC at Sight' },
+            { id: 2, name: 'Omex Trading Pvt Ltd', country: 'India', city: 'Chennai', type: 'Importer', email: 'imports@omex.co.in', phone: '+91 44 2345 6789', demand: '150 MT/mo', terms: 'TT 30/70' },
+            { id: 3, name: 'Mahalaxmi Traders', country: 'India', city: 'Cochin', type: 'Wholesaler', email: 'sales@mahalaxmitraders.in', phone: '+91 484 2345 678', demand: '80 MT/mo', terms: 'LC 60 Days' },
+            { id: 4, name: 'Vinay Exim', country: 'India', city: 'Mumbai', type: 'Trading House', email: 'vinay@vinayexim.com', phone: '+91 22 8765 4321', demand: '300 MT/mo', terms: 'LC at Sight' },
+            { id: 5, name: 'Sri Sai Impex', country: 'India', city: 'Tuticorin', type: 'Importer', email: 'info@srisaiimpex.in', phone: '+91 461 2345 123', demand: '100 MT/mo', terms: 'DP' },
+            { id: 6, name: 'Al-Noor Cleaning Supplies Co.', country: 'Pakistan', city: 'Karachi', type: 'Distributor', email: 'purchase@alnoor.pk', phone: '+92 21 3456 7890', demand: '120 MT/mo', terms: 'DA 60 Days' },
+            { id: 7, name: 'Rizwan Broom Mart', country: 'Pakistan', city: 'Lahore', type: 'Retail Chain', email: 'rizwan@broommart.pk', phone: '+92 42 3571 2345', demand: '50 MT/mo', terms: 'TT 50/50' },
+            { id: 8, name: 'Ameer Traders Pvt Ltd', country: 'Pakistan', city: 'Karachi', type: 'Importer', email: 'contact@ameertraders.com', phone: '+92 21 3587 6543', demand: '180 MT/mo', terms: 'LC at Sight' },
+            { id: 9, name: 'Pak Housewares Importers', country: 'Pakistan', city: 'Islamabad', type: 'Wholesaler', email: 'import@pakhousewares.pk', phone: '+92 51 2345 678', demand: '90 MT/mo', terms: 'TT 100%' },
+            { id: 10, name: 'Imtiaz International', country: 'Pakistan', city: 'Karachi', type: 'Trading Co', email: 'imtiaz@intl.pk', phone: '+92 21 3666 7777', demand: '140 MT/mo', terms: 'LC 30 Days' },
+        ];
+
+        const MARKET_DATA = [
+            { year: '2022', demand: 1200, supply: 1400, price: 680 },
+            { year: '2023', demand: 1350, supply: 1450, price: 710 },
+            { year: '2024', demand: 1500, supply: 1500, price: 740 },
+            { year: '2025', demand: 1750, supply: 1600, price: 790 },
+            { year: '2026', demand: 2100, supply: 1700, price: 850 },
+        ];
+
+        const SUPPLY_SPECS = [
+            { length: '90-120 cm', diameter: 'Standard', grade: 'A', capacity: '200 MT/mo', region: 'North Sumatra' },
+            { length: '70-90 cm', diameter: 'Mixed', grade: 'B', capacity: '150 MT/mo', region: 'Riau' },
+            { length: '< 70 cm', diameter: 'Thin', grade: 'C', capacity: '80 MT/mo', region: 'Aceh' },
+        ];
+
+        // --- Translations ---
+
+        const TRANSLATIONS = {
+            en: {
+                nav: {
+                    overview: "Overview",
+                    calculator: "Pricing & Calculator",
+                    logistics: "Logistics & Costs",
+                    buyers: "Market & Buyers",
+                    role: "Export Manager"
+                },
+                hero: {
+                    subtitle: "Global Trade Intelligence • 2026 Strategic Plan",
+                    title: "Palm Broomstick Export Management Hub",
+                    desc: "End-to-End Pricing, Supply Chain Optimization, and International Market Intelligence for the Lidi Sawit Industry.",
+                    cta_sim: "Run Cost Simulation",
+                    cta_db: "Access Buyer Database"
+                },
+                metrics: {
+                    market_price: "Current Market Price (FOB)",
+                    demand_region: "Top Demand Region",
+                    container_cap: "Container Capacity",
+                    duty: "Duty",
+                    optimization: "Optimization target: 98% fill rate",
+                    margin_pressure: "Highest volume, lowest margin pressure",
+                    vs_last: "vs Last Month"
+                },
+                calc: {
+                    title: "Cost Parameters (20ft)",
+                    exchange_rate: "Exchange Rate (USD/IDR)",
+                    raw_material: "Raw Material Price (IDR/kg)",
+                    market_avg: "Current market avg",
+                    target_margin: "Target Margin (%)",
+                    dest_market: "Destination Market",
+                    fixed_costs: "Fixed Cost Details",
+                    trucking: "Trucking (Belawan)",
+                    fumigation: "Fumigation",
+                    port_handling: "Port Handling (THC/LOLO)",
+                    export_docs: "Export Docs",
+                    processing: "Processing & Labor (Packing, Drying)",
+                    packing_mat: "Packing Materials (Rope, Bags)",
+                    warehouse: "Warehouse Handling (Load/Clean)",
+                    quarantine: "Quarantine Fee",
+                    fob_label: "FOB Price / kg",
+                    fob_desc: "Free On Board (Belawan)",
+                    cif_label: "CIF Price / kg",
+                    cif_desc: "Cost, Insurance & Freight",
+                    landed_label: "Landed Cost / kg",
+                    landed_desc: "Inc. Duty & Clearing",
+                    waterfall: "Pricing Waterfall Analysis (Per Container)",
+                    waterfall_raw: "Raw Material",
+                    waterfall_ops: "Operational",
+                    waterfall_margin: "Margin",
+                    waterfall_fob: "Total FOB Price",
+                    waterfall_profit: "Net Profit",
+                    waterfall_exw: "Total EXW (Ex Works)",
+                    waterfall_cif: "Total CIF (Cost, Ins, Freight)",
+                    waterfall_ddp: "Total DDP (Landed Cost)",
+                    btn_pdf: "Generate Quotation PDF",
+                    btn_save: "Save to History"
+                },
+                logistics: {
+                    title: "Incoterms & Logistics Chain",
+                    subtitle: "Visual guide to risk transfer and cost accumulation for global trade.",
+                    terms: {
+                        exw: "Buyer pays everything from your warehouse.",
+                        fob: "You pay until loaded on vessel. Best for B2B.",
+                        cif: "You pay sea freight & insurance. Buyer pays duty.",
+                        ddp: "You pay everything to buyer door. Highest risk."
+                    },
+                    route_title: "Logistics Route: North Sumatra → Global",
+                    step1: { title: "Warehouse / Collection Point", desc: "Location: Aek Kanopan / Rantau Prapat", detail: "Process: Drying (15% moisture), Grading, Cutting, Bundling (50kg)" },
+                    step2: { title: "Inland Trucking", desc: "Route: Warehouse → Belawan Port (Medan)", cost: "Cost: ~IDR 7.5 - 8.5 Mio", time: "Time: 8-12 Hours" },
+                    step3: { title: "Port Operations (Belawan)", desc: "Activities: Custom Clearance (PEB), Quarantine (Karantina), Fumigation", detail1: "Fumigation: Methyl Bromide", detail2: "Phytosanitary Cert" },
+                    step4: { title: "Ocean Freight", desc: "Destinations: Nhava Sheva (IN), Karachi (PK), Shanghai (CN)", detail: "Transit Time: India (10-14 days), China (7-10 days)" }
+                },
+                market: {
+                    title: "Intelijen Pasar & Pembeli",
+                    subtitle: "Wawasan berbasis data tentang tren pasokan dan daftar pembeli terverifikasi.",
+                    chart_supply: "Export Supply vs. Global Demand",
+                    competitor_title: "Competitor Landscape",
+                    share: "Share",
+                    specs_title: "Technical Specs Demand",
+                    col_length: "Length",
+                    col_type: "Type",
+                    col_market: "Primary Market",
+                    db_title: "Verified Buyer Database",
+                    search_ph: "Search buyer, country...",
+                    col_company: "Company Name",
+                    col_country: "Country",
+                    col_loc: "Location",
+                    col_type_db: "Type",
+                    col_action: "Aksi",
+                    view_profile: "View Profile",
+                    no_results: "No buyers found matching your search.",
+                    modal_title: "Buyer Profile",
+                    contact_info: "Contact Information",
+                    req_info: "Requirements",
+                    close: "Tutup"
+                }
+            },
+            id: {
+                nav: {
+                    overview: "Ringkasan",
+                    calculator: "Kalkulator Harga",
+                    logistics: "Logistik & Biaya",
+                    buyers: "Pasar & Pembeli",
+                    role: "Manajer Ekspor"
+                },
+                hero: {
+                    subtitle: "Intelijen Perdagangan Global • Rencana Strategis 2026",
+                    title: "Pusat Manajemen Ekspor Lidi Sawit",
+                    desc: "Penetapan Harga End-to-End, Optimalisasi Rantai Pasok, dan Intelijen Pasar Internasional untuk Industri Lidi Sawit.",
+                    cta_sim: "Mulai Simulasi Biaya",
+                    cta_db: "Akses Database Pembeli"
+                },
+                metrics: {
+                    market_price: "Harga Pasar Saat Ini (FOB)",
+                    demand_region: "Wilayah Permintaan Tertinggi",
+                    container_cap: "Kapasitas Kontainer",
+                    duty: "Bea Masuk",
+                    optimization: "Target optimasi: 98% terisi",
+                    margin_pressure: "Volume tertinggi, tekanan margin terendah",
+                    vs_last: "vs Bulan Lalu"
+                },
+                calc: {
+                    title: "Parameter Biaya (20ft)",
+                    exchange_rate: "Nilai Tukar (USD/IDR)",
+                    raw_material: "Harga Bahan Baku (IDR/kg)",
+                    market_avg: "Rata-rata pasar saat ini",
+                    target_margin: "Target Margin (%)",
+                    dest_market: "Pasar Tujuan",
+                    fixed_costs: "Rincian Biaya Tetap",
+                    trucking: "Truk (Belawan)",
+                    fumigation: "Fumigasi",
+                    port_handling: "Handling Pelabuhan (THC/LOLO)",
+                    export_docs: "Dokumen Ekspor",
+                    processing: "Biaya Proses (Tenaga Kerja, Sortir)",
+                    packing_mat: "Bahan Kemasan (Tali, Karung)",
+                    warehouse: "Handling Gudang (Muat/Sewa)",
+                    quarantine: "Biaya Karantina",
+                    fob_label: "Harga FOB / kg",
+                    fob_desc: "Free On Board (Belawan)",
+                    cif_label: "Harga CIF / kg",
+                    cif_desc: "Cost, Insurance & Freight",
+                    landed_label: "Landed Cost / kg",
+                    landed_desc: "Termasuk Bea & Kliring",
+                    waterfall: "Analisis Komponen Harga (Per Kontainer)",
+                    waterfall_raw: "Bahan Baku",
+                    waterfall_ops: "Operasional",
+                    waterfall_margin: "Margin",
+                    waterfall_fob: "Total Harga FOB",
+                    waterfall_profit: "Laba Bersih",
+                    waterfall_exw: "Total EXW (Ex Works)",
+                    waterfall_cif: "Total CIF (Cost, Ins, Freight)",
+                    waterfall_ddp: "Total DDP (Landed Cost)",
+                    btn_pdf: "Buat PDF Penawaran",
+                    btn_save: "Simpan ke Riwayat"
+                },
+                logistics: {
+                    title: "Incoterms & Rantai Logistik",
+                    subtitle: "Panduan visual transfer risiko dan akumulasi biaya perdagangan global.",
+                    terms: {
+                        exw: "Pembeli menanggung semua biaya dari gudang Anda.",
+                        fob: "Anda bayar sampai muat kapal. Terbaik untuk B2B.",
+                        cif: "Anda bayar kargo laut & asuransi. Pembeli bayar bea.",
+                        ddp: "Anda bayar semua sampai pintu pembeli. Risiko tertinggi."
+                    },
+                    route_title: "Rute Logistik: Sumatera Utara → Global",
+                    step1: { title: "Gudang / Titik Pengumpulan", desc: "Lokasi: Aek Kanopan / Rantau Prapat", detail: "Proses: Pengeringan (kadar air 15%), Sortir, Potong, Ikat (50kg)" },
+                    step2: { title: "Truk Darat", desc: "Rute: Gudang → Pelabuhan Belawan (Medan)", cost: "Biaya: ~Rp 7,5 - 8,5 Jt", time: "Waktu: 8-12 Jam" },
+                    step3: { title: "Operasional Pelabuhan", desc: "Aktivitas: Bea Cukai (PEB), Karantina, Fumigasi", detail1: "Fumigasi: Metil Bromida", detail2: "Sertifikat Fitosanitari" },
+                    step4: { title: "Kargo Laut", desc: "Tujuan: Nhava Sheva (IN), Karachi (PK), Shanghai (CN)", detail: "Waktu Transit: India (10-14 hari), China (7-10 hari)" }
+                },
+                market: {
+                    title: "Intelijen Pasar & Pembeli",
+                    subtitle: "Wawasan berbasis data tentang tren pasokan dan daftar pembeli terverifikasi.",
+                    chart_supply: "Pasokan Ekspor vs. Permintaan Global",
+                    competitor_title: "Lansekap Kompetitor",
+                    share: "Pangsa",
+                    specs_title: "Permintaan Spesifikasi Teknis",
+                    col_length: "Panjang",
+                    col_type: "Tipe",
+                    col_market: "Pasar Utama",
+                    db_title: "Database Pembeli Terverifikasi",
+                    search_ph: "Cari pembeli, negara...",
+                    col_company: "Nama Perusahaan",
+                    col_country: "Negara",
+                    col_loc: "Lokasi",
+                    col_type_db: "Tipe",
+                    col_action: "Aksi",
+                    view_profile: "Lihat Profil",
+                    no_results: "Tidak ada pembeli ditemukan.",
+                    modal_title: "Profil Pembeli",
+                    contact_info: "Informasi Kontak",
+                    req_info: "Kebutuhan",
+                    close: "Tutup"
+                }
+            }
+        };
+
+        // --- Components ---
+
+        const Card = ({ children, className = "" }) => (
+            <div className={`bg-white rounded-lg shadow-sm border border-slate-200 ${className}`}>
+                {children}
+            </div>
+        );
+
+        const SectionTitle = ({ title, subtitle }) => (
+            <div className="mb-6">
+                <h2 className="text-2xl font-bold text-slate-800 tracking-tight">{title}</h2>
+                {subtitle && <p className="text-slate-500 mt-1">{subtitle}</p>}
+            </div>
+        );
+
+        const Badge = ({ children, color = "blue" }) => {
+            const styles = {
+                blue: "bg-blue-100 text-blue-800",
+                green: "bg-emerald-100 text-emerald-800",
+                amber: "bg-amber-100 text-amber-800",
+                slate: "bg-slate-100 text-slate-800",
+            };
+            return (
+                <span className={`px-2.5 py-0.5 rounded-full text-xs font-semibold ${styles[color] || styles.blue}`}>
+                    {children}
+                </span>
+            );
+        };
+
+        // --- Dual Currency Formatter Component ---
+        const DualPrice = ({ value, exchangeRate, className = "", label = "", size = "normal" }) => {
+            const usdValue = value / exchangeRate;
+            const fmtUSD = (val) => new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', minimumFractionDigits: 2 }).format(val);
+            const fmtIDR = (val) => new Intl.NumberFormat('id-ID', { style: 'currency', currency: 'IDR', maximumFractionDigits: 0 }).format(val);
+
+            const idrClass = size === "small" ? "font-mono font-bold text-slate-900 text-sm" : "font-mono font-bold text-slate-900";
+            const usdClass = size === "small" ? "font-mono text-blue-600 text-[10px]" : "font-mono text-blue-600 text-sm";
+
+            return (
+                <div className={className}>
+                    {label && <div className="text-xs text-slate-500 font-medium uppercase mb-1">{label}</div>}
+                    <div className="flex flex-col">
+                        <span className={idrClass}>{fmtIDR(value)}</span>
+                        <span className={usdClass}>{fmtUSD(usdValue)}</span>
+                    </div>
+                </div>
+            );
+        };
+
+        const RangeInput = ({ label, value, onChange, min, max, step = 100000, formatIDR, exchangeRate }) => {
+            const usdValue = value / exchangeRate;
+            const formatUSD = (val) => new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', minimumFractionDigits: 2 }).format(val);
+
+            return (
+                <div className="space-y-1">
+                    <div className="flex justify-between items-end text-xs font-medium text-slate-600 mb-1">
+                        <span>{label}</span>
+                        <div className="text-right leading-tight">
+                            <div className="font-mono text-slate-800">{formatIDR(value)}</div>
+                            <div className="font-mono text-blue-600 text-[10px]">{formatUSD(usdValue)}</div>
+                        </div>
+                    </div>
+                    <input 
+                        type="range" 
+                        min={min} 
+                        max={max} 
+                        step={step}
+                        value={value} 
+                        onChange={(e) => onChange(Number(e.target.value))}
+                        className="w-full h-1.5 bg-slate-200 rounded-lg appearance-none cursor-pointer accent-blue-600" 
+                    />
+                </div>
+            );
+        };
+
+        // --- Main Views ---
+
+        const Overview = ({ setView, lang }) => {
+            const t = TRANSLATIONS[lang];
+            
+            return (
+                <div className="space-y-8 animate-fadeIn">
+                    {/* Hero Section */}
+                    <div className="relative bg-slate-900 rounded-2xl overflow-hidden text-white p-8 md:p-12 shadow-2xl">
+                        <div className="absolute top-0 right-0 p-8 opacity-10">
+                            <Ship size={200} />
+                        </div>
+                        <div className="relative z-10 max-w-3xl">
+                            <div className="flex items-center space-x-2 text-blue-400 mb-4 font-mono text-sm uppercase tracking-wider">
+                                <Globe size={16} />
+                                <span>{t.hero.subtitle}</span>
+                            </div>
+                            <h1 className="text-4xl md:text-5xl font-bold mb-6 leading-tight">
+                                {t.hero.title}
+                            </h1>
+                            <p className="text-slate-300 text-lg mb-8 max-w-2xl leading-relaxed">
+                                {t.hero.desc}
+                            </p>
+                            <div className="flex flex-wrap gap-4">
+                                <button 
+                                    onClick={() => setView('calculator')}
+                                    className="bg-blue-600 hover:bg-blue-500 text-white px-6 py-3 rounded-lg font-semibold flex items-center transition-colors shadow-lg cursor-pointer"
+                                >
+                                    <Calculator className="mr-2" size={20} />
+                                    {t.hero.cta_sim}
+                                </button>
+                                <button 
+                                    onClick={() => setView('buyers')}
+                                    className="bg-slate-700 hover:bg-slate-600 text-white px-6 py-3 rounded-lg font-semibold flex items-center transition-colors shadow-lg cursor-pointer"
+                                >
+                                    <Users className="mr-2" size={20} />
+                                    {t.hero.cta_db}
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+
+                    {/* Key Metrics Grid */}
+                    <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+                        <Card className="p-6 border-l-4 border-blue-600">
+                            <div className="flex justify-between items-start mb-4">
+                                <div>
+                                    <p className="text-slate-500 text-sm font-medium uppercase">{t.metrics.market_price}</p>
+                                    <h3 className="text-2xl font-bold text-slate-800 mt-1">$680 - $720 <span className="text-sm font-normal text-slate-500">/ MT</span></h3>
+                                </div>
+                                <div className="p-2 bg-blue-50 rounded-lg text-blue-600">
+                                    <TrendingUp size={24} />
+                                </div>
+                            </div>
+                            <div className="text-sm text-emerald-600 flex items-center">
+                                <ArrowRight size={14} className="mr-1 rotate-[-45deg]" />
+                                +4.2% {t.metrics.vs_last}
+                            </div>
+                        </Card>
+
+                        <Card className="p-6 border-l-4 border-amber-500">
+                            <div className="flex justify-between items-start mb-4">
+                                <div>
+                                    <p className="text-slate-500 text-sm font-medium uppercase">{t.metrics.demand_region}</p>
+                                    <h3 className="text-2xl font-bold text-slate-800 mt-1">India <span className="text-sm font-normal text-slate-500">(92% {t.metrics.duty})</span></h3>
+                                </div>
+                                <div className="p-2 bg-amber-50 rounded-lg text-amber-600">
+                                    <Globe size={24} />
+                                </div>
+                            </div>
+                            <div className="text-sm text-slate-500">
+                                {t.metrics.margin_pressure}
+                            </div>
+                        </Card>
+
+                        <Card className="p-6 border-l-4 border-emerald-500">
+                            <div className="flex justify-between items-start mb-4">
+                                <div>
+                                    <p className="text-slate-500 text-sm font-medium uppercase">{t.metrics.container_cap}</p>
+                                    <h3 className="text-2xl font-bold text-slate-800 mt-1">20,000 <span className="text-sm font-normal text-slate-500">kg (20ft)</span></h3>
+                                </div>
+                                <div className="p-2 bg-emerald-50 rounded-lg text-emerald-600">
+                                    <Package size={24} />
+                                </div>
+                            </div>
+                            <div className="text-sm text-slate-500">
+                                {t.metrics.optimization}
+                            </div>
+                        </Card>
+                    </div>
+                </div>
+            );
+        };
+
+        const PricingCalculator = ({ lang }) => {
+            const t = TRANSLATIONS[lang];
+            // State for Inputs
+            const [exchangeRate, setExchangeRate] = useState(EXCHANGE_RATE_DEFAULT);
+            const [destination, setDestination] = useState(DESTINATIONS[0]);
+            const [farmerPriceIdr, setFarmerPriceIdr] = useState(4000); // Per Kg
+            const [marginPercent, setMarginPercent] = useState(15);
+
+            // Variable Fixed Costs State (Defaulted to prompt values)
+            const [truckingCost, setTruckingCost] = useState(7500000);
+            const [fumigationCost, setFumigationCost] = useState(2000000);
+            const [portHandlingCost, setPortHandlingCost] = useState(1600000); // THC+LOLO
+            const [exportDocCost, setExportDocCost] = useState(2120000); // Docs
+            
+            // New Adjustable Costs (Processing, Packing Material, Warehouse, Quarantine)
+            const [processingCost, setProcessingCost] = useState(8000000); // ~400/kg * 20000
+            const [packingMaterialCost, setPackingMaterialCost] = useState(2000000);
+            const [warehouseCost, setWarehouseCost] = useState(600000); // Loading + Cleaning
+            const [quarantineCost, setQuarantineCost] = useState(200000); // ~5/kg * 20000 + misc
+
+            // Fixed Costs (IDR per container unless specified)
+            const CONTAINER_WEIGHT_KG = 20000;
+            
+            // Calculations
+            const rawMaterialTotalIdr = farmerPriceIdr * CONTAINER_WEIGHT_KG;
+            
+            // EXW Calculation (Raw Material + Processing + Packing + Warehouse)
+            const exwCostIdr = rawMaterialTotalIdr + processingCost + packingMaterialCost + warehouseCost;
+
+            // FOB Calculation (EXW + Trucking + Fumigation + Port + Docs + Quarantine + Gate + Margin)
+            const gateFee = 35000;
+            const operationalTotalIdr = 
+                truckingCost + 
+                fumigationCost + 
+                portHandlingCost + 
+                exportDocCost + 
+                quarantineCost +
+                gateFee;
+
+            const totalCostIdr = exwCostIdr + operationalTotalIdr;
+            const totalCostUsd = totalCostIdr / exchangeRate;
+            
+            // Pricing Strategy
+            const targetMarginUsd = totalCostUsd * (marginPercent / 100);
+            const targetMarginIdr = totalCostIdr * (marginPercent / 100);
+            
+            const fobPriceUsd = totalCostUsd + targetMarginUsd;
+            const fobPriceIdr = totalCostIdr + targetMarginIdr;
+            
+            const fobPricePerKgUsd = fobPriceUsd / CONTAINER_WEIGHT_KG;
+            const fobPricePerKgIdr = fobPriceIdr / CONTAINER_WEIGHT_KG;
+            
+            // CIF Calculation
+            const freightUsd = destination.freight;
+            const insuranceUsd = fobPriceUsd * 0.002; // 0.2% insurance
+            
+            const cifPriceUsd = fobPriceUsd + freightUsd + insuranceUsd;
+            const cifPriceIdr = cifPriceUsd * exchangeRate;
+            
+            const cifPricePerKgUsd = cifPriceUsd / CONTAINER_WEIGHT_KG;
+            const cifPricePerKgIdr = cifPriceIdr * exchangeRate; 
+            
+            // Landed Cost (DDP approximation components)
+            const dutyCostUsd = cifPriceUsd * destination.duty;
+            const clearingCostUsd = 500; // Misc clearing cost
+            const landedCostUsd = cifPriceUsd + dutyCostUsd + clearingCostUsd;
+            const landedCostIdr = landedCostUsd * exchangeRate;
+            
+            const landedCostPerKgUsd = landedCostUsd / CONTAINER_WEIGHT_KG;
+            const landedCostPerKgIdr = landedCostIdr / CONTAINER_WEIGHT_KG;
+
+            // Formatters
+            const fmtUSD = (val) => new Intl.NumberFormat('en-US', { style: 'currency', currency: 'USD', minimumFractionDigits: 2 }).format(val);
+            const fmtIDR = (val) => new Intl.NumberFormat('id-ID', { style: 'currency', currency: 'IDR', maximumFractionDigits: 0 }).format(val);
+
+            return (
+                <div className="grid grid-cols-1 lg:grid-cols-12 gap-8">
+                    {/* Configuration Panel */}
+                    <div className="lg:col-span-4 space-y-6">
+                        <Card className="p-6 bg-slate-50 border-slate-200">
+                            <h3 className="font-bold text-slate-800 mb-4 flex items-center">
+                                <Calculator size={18} className="mr-2 text-blue-600" />
+                                {t.calc.title}
+                            </h3>
+                            
+                            <div className="space-y-4">
+                                <div>
+                                    <label className="block text-xs font-semibold text-slate-500 uppercase mb-1">{t.calc.exchange_rate}</label>
+                                    <input 
+                                        type="number" 
+                                        value={exchangeRate} 
+                                        onChange={(e) => setExchangeRate(Number(e.target.value))}
+                                        className="w-full p-2 border border-slate-300 rounded focus:ring-2 focus:ring-blue-500 outline-none" 
+                                    />
+                                </div>
+                                
+                                <div>
+                                    <label className="block text-xs font-semibold text-slate-500 uppercase mb-1">{t.calc.raw_material}</label>
+                                    <input 
+                                        type="number" 
+                                        value={farmerPriceIdr} 
+                                        onChange={(e) => setFarmerPriceIdr(Number(e.target.value))}
+                                        className="w-full p-2 border border-slate-300 rounded focus:ring-2 focus:ring-blue-500 outline-none" 
+                                    />
+                                    <p className="text-xs text-slate-400 mt-1">{t.calc.market_avg}: IDR 4,000</p>
+                                </div>
+
+                                <div>
+                                    <label className="block text-xs font-semibold text-slate-500 uppercase mb-1">{t.calc.target_margin}</label>
+                                    <input 
+                                        type="range" 
+                                        min="0" 
+                                        max="50" 
+                                        value={marginPercent} 
+                                        onChange={(e) => setMarginPercent(Number(e.target.value))}
+                                        className="w-full h-2 bg-slate-200 rounded-lg appearance-none cursor-pointer accent-blue-600" 
+                                    />
+                                    <div className="flex justify-between text-xs font-medium text-slate-600 mt-1">
+                                        <span>0%</span>
+                                        <span className="text-blue-600 font-bold">{marginPercent}%</span>
+                                        <span>50%</span>
+                                    </div>
+                                </div>
+
+                                <div>
+                                    <label className="block text-xs font-semibold text-slate-500 uppercase mb-1">{t.calc.dest_market}</label>
+                                    <select 
+                                        className="w-full p-2 border border-slate-300 rounded focus:ring-2 focus:ring-blue-500 outline-none"
+                                        onChange={(e) => setDestination(DESTINATIONS.find(d => d.country === e.target.value))}
+                                        value={destination.country}
+                                    >
+                                        {DESTINATIONS.map(d => (
+                                            <option key={d.country} value={d.country}>{d.country} ({lang === 'en' ? 'Duty' : 'Bea'}: {(d.duty * 100).toFixed(0)}%)</option>
+                                        ))}
+                                    </select>
+                                </div>
+                            </div>
+                        </Card>
+
+                        {/* Cost Breakdown Mini (Adjustable) */}
+                        <Card className="p-6">
+                            <h3 className="font-bold text-slate-800 mb-4 flex items-center">
+                                <Truck size={18} className="mr-2 text-slate-500" />
+                                {t.calc.fixed_costs}
+                            </h3>
+                            <div className="space-y-4">
+                                {/* Existing Sliders */}
+                                <RangeInput 
+                                    label={t.calc.trucking} 
+                                    value={truckingCost} 
+                                    onChange={setTruckingCost} 
+                                    formatIDR={fmtIDR}
+                                    exchangeRate={exchangeRate} 
+                                    min={0}
+                                    max={50000000}
+                                />
+                                <RangeInput 
+                                    label={t.calc.fumigation} 
+                                    value={fumigationCost} 
+                                    onChange={setFumigationCost} 
+                                    formatIDR={fmtIDR}
+                                    exchangeRate={exchangeRate}
+                                    min={0}
+                                    max={20000000}
+                                />
+                                <RangeInput 
+                                    label={t.calc.port_handling} 
+                                    value={portHandlingCost} 
+                                    onChange={setPortHandlingCost} 
+                                    formatIDR={fmtIDR}
+                                    exchangeRate={exchangeRate}
+                                    min={0}
+                                    max={20000000}
+                                />
+                                <RangeInput 
+                                    label={t.calc.export_docs} 
+                                    value={exportDocCost} 
+                                    onChange={setExportDocCost} 
+                                    formatIDR={fmtIDR}
+                                    exchangeRate={exchangeRate}
+                                    min={0}
+                                    max={20000000}
+                                />
+                                
+                                {/* New Sliders */}
+                                <div className="border-t border-slate-100 my-2 pt-2"></div>
+                                
+                                <RangeInput 
+                                    label={t.calc.processing} 
+                                    value={processingCost} 
+                                    onChange={setProcessingCost} 
+                                    formatIDR={fmtIDR}
+                                    exchangeRate={exchangeRate}
+                                    min={0}
+                                    max={20000000}
+                                />
+                                <RangeInput 
+                                    label={t.calc.packing_mat} 
+                                    value={packingMaterialCost} 
+                                    onChange={setPackingMaterialCost} 
+                                    formatIDR={fmtIDR}
+                                    exchangeRate={exchangeRate} 
+                                    min={0}
+                                    max={20000000}
+                                />
+                                <RangeInput 
+                                    label={t.calc.warehouse} 
+                                    value={warehouseCost} 
+                                    onChange={setWarehouseCost} 
+                                    formatIDR={fmtIDR}
+                                    exchangeRate={exchangeRate} 
+                                    min={0}
+                                    max={20000000}
+                                />
+                                <RangeInput 
+                                    label={t.calc.quarantine} 
+                                    value={quarantineCost} 
+                                    onChange={setQuarantineCost} 
+                                    formatIDR={fmtIDR}
+                                    exchangeRate={exchangeRate}
+                                    min={0}
+                                    max={20000000}
+                                />
+                            </div>
+                            <div className="mt-4 pt-4 border-t border-slate-100 text-xs text-slate-400">
+                                Adjustable ranges based on market rates
+                            </div>
+                        </Card>
+                    </div>
+
+                    {/* Results Panel */}
+                    <div className="lg:col-span-8 space-y-6">
+                        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                            <Card className="p-5 bg-white border-l-4 border-blue-600">
+                                <DualPrice 
+                                    label={t.calc.fob_label}
+                                    value={fobPricePerKgIdr}
+                                    exchangeRate={exchangeRate}
+                                    className="mt-1"
+                                />
+                                <p className="text-xs text-slate-400 mt-2">{t.calc.fob_desc}</p>
+                            </Card>
+                            
+                            <Card className="p-5 bg-white border-l-4 border-indigo-600">
+                                <DualPrice 
+                                    label={t.calc.cif_label}
+                                    value={cifPricePerKgIdr}
+                                    exchangeRate={exchangeRate}
+                                    className="mt-1"
+                                />
+                                <p className="text-xs text-slate-400 mt-2">{t.calc.cif_desc}</p>
+                            </Card>
+
+                            <Card className="p-5 bg-white border-l-4 border-emerald-600">
+                                <DualPrice 
+                                    label={t.calc.landed_label}
+                                    value={landedCostPerKgIdr}
+                                    exchangeRate={exchangeRate}
+                                    className="mt-1"
+                                />
+                                <p className="text-xs text-slate-400 mt-2">{t.calc.landed_desc} ({destination.country})</p>
+                            </Card>
+                        </div>
+
+                        <Card className="p-6">
+                            <h3 className="text-lg font-bold text-slate-800 mb-6">{t.calc.waterfall}</h3>
+                            <div className="space-y-4">
+                                
+                                {/* 1. EXW Calculation */}
+                                <div className="bg-slate-50 p-3 rounded-lg border border-slate-100">
+                                    <div className="flex justify-between items-center mb-1">
+                                        <span className="text-xs font-medium text-slate-600">{t.calc.waterfall_raw}</span>
+                                        <DualPrice value={rawMaterialTotalIdr} exchangeRate={exchangeRate} size="small" className="text-right" />
+                                    </div>
+                                    <div className="flex justify-between items-center pt-2 border-t border-slate-200">
+                                        <span className="text-sm font-bold text-slate-800">{t.calc.waterfall_exw}</span>
+                                        <DualPrice value={exwCostIdr} exchangeRate={exchangeRate} size="small" className="text-right" />
+                                    </div>
+                                </div>
+
+                                {/* 2. FOB Calculation */}
+                                <div className="bg-blue-50 p-3 rounded-lg border border-blue-100">
+                                    <div className="flex justify-between items-center mb-1">
+                                        <span className="text-xs font-medium text-slate-600">{t.calc.waterfall_ops}</span>
+                                        <DualPrice value={operationalTotalIdr} exchangeRate={exchangeRate} size="small" className="text-right" />
+                                    </div>
+                                    <div className="flex justify-between items-center mb-1">
+                                        <span className="text-xs font-medium text-slate-600">{t.calc.waterfall_margin} ({marginPercent}%)</span>
+                                        <DualPrice value={targetMarginIdr} exchangeRate={exchangeRate} size="small" className="text-right" />
+                                    </div>
+                                    <div className="flex justify-between items-center pt-2 border-t border-blue-200">
+                                        <span className="text-sm font-bold text-blue-900">{t.calc.waterfall_fob}</span>
+                                        <DualPrice value={fobPriceIdr} exchangeRate={exchangeRate} size="small" className="text-right" />
+                                    </div>
+                                </div>
+
+                                {/* 3. CIF Calculation */}
+                                <div className="bg-indigo-50 p-3 rounded-lg border border-indigo-100">
+                                    <div className="flex justify-between items-center pt-1">
+                                        <span className="text-sm font-bold text-indigo-900">{t.calc.waterfall_cif}</span>
+                                        <DualPrice value={cifPriceIdr} exchangeRate={exchangeRate} size="small" className="text-right" />
+                                    </div>
+                                </div>
+
+                                {/* 4. DDP Calculation */}
+                                <div className="bg-emerald-50 p-3 rounded-lg border border-emerald-100">
+                                    <div className="flex justify-between items-center pt-1">
+                                        <span className="text-sm font-bold text-emerald-900">{t.calc.waterfall_ddp}</span>
+                                        <DualPrice value={landedCostIdr} exchangeRate={exchangeRate} size="small" className="text-right" />
+                                    </div>
+                                </div>
+
+                                <div className="flex justify-between items-center pt-4 border-t border-slate-200 mt-2">
+                                    <div className="text-xs font-bold text-slate-500">{t.calc.waterfall_profit}</div>
+                                    <DualPrice value={targetMarginIdr} exchangeRate={exchangeRate} size="small" className="text-right" />
+                                </div>
+                            </div>
+                        </Card>
+
+                        {/* Action Buttons */}
+                        <div className="grid grid-cols-2 gap-4">
+                            <button className="bg-slate-800 text-white py-3 rounded-lg font-semibold hover:bg-slate-700 transition-colors flex justify-center items-center shadow cursor-pointer">
+                                <FileText size={18} className="mr-2" />
+                                {t.calc.btn_pdf}
+                            </button>
+                            <button className="bg-blue-600 text-white py-3 rounded-lg font-semibold hover:bg-blue-500 transition-colors flex justify-center items-center shadow cursor-pointer">
+                                <DollarSign size={18} className="mr-2" />
+                                {t.calc.btn_save}
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            );
+        };
+
+        const LogisticsBreakdown = ({ lang }) => {
+            const t = TRANSLATIONS[lang];
+
+            return (
+                <div className="space-y-8">
+                    <SectionTitle 
+                        title={t.logistics.title} 
+                        subtitle={t.logistics.subtitle}
+                    />
+
+                    {/* Incoterms Visual */}
+                    <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+                        {[
+                            { code: 'EXW', title: 'Ex Works', desc: t.logistics.terms.exw, color: 'border-slate-300' },
+                            { code: 'FOB', title: 'Free On Board', desc: t.logistics.terms.fob, color: 'border-blue-500' },
+                            { code: 'CIF', title: 'Cost Ins. Freight', desc: t.logistics.terms.cif, color: 'border-indigo-500' },
+                            { code: 'DDP', title: 'Delivered Duty Paid', desc: t.logistics.terms.ddp, color: 'border-emerald-500' },
+                        ].map((term) => (
+                            <Card key={term.code} className={`p-4 border-t-4 ${term.color} hover:shadow-md transition-shadow`}>
+                                <h3 className="text-2xl font-bold text-slate-800">{term.code}</h3>
+                                <p className="text-sm font-semibold text-slate-600 mt-1">{term.title}</p>
+                                <p className="text-xs text-slate-500 mt-2 leading-relaxed">{term.desc}</p>
+                            </Card>
+                        ))}
+                    </div>
+
+                    {/* Route Map (Styled List) */}
+                    <Card className="p-8">
+                        <h3 className="font-bold text-lg mb-6 flex items-center">
+                            <Navigation className="mr-2 text-blue-600" />
+                            {t.logistics.route_title}
+                        </h3>
+                        
+                        <div className="relative border-l-2 border-slate-200 ml-4 space-y-10">
+                            <div className="relative pl-8">
+                                <span className="absolute -left-[9px] top-0 w-4 h-4 rounded-full bg-slate-400 ring-4 ring-white"></span>
+                                <h4 className="font-bold text-slate-800">{t.logistics.step1.title}</h4>
+                                <p className="text-sm text-slate-500">{t.logistics.step1.desc}</p>
+                                <div className="mt-2 bg-slate-50 p-3 rounded text-xs text-slate-600 inline-block">
+                                    {t.logistics.step1.detail}
+                                </div>
+                            </div>
+
+                            <div className="relative pl-8">
+                                <span className="absolute -left-[9px] top-0 w-4 h-4 rounded-full bg-blue-500 ring-4 ring-white"></span>
+                                <h4 className="font-bold text-slate-800">{t.logistics.step2.title}</h4>
+                                <p className="text-sm text-slate-500">{t.logistics.step2.desc}</p>
+                                <div className="mt-2 flex space-x-4 text-xs">
+                                    <span className="bg-blue-50 text-blue-700 px-2 py-1 rounded">{t.logistics.step2.cost}</span>
+                                    <span className="bg-blue-50 text-blue-700 px-2 py-1 rounded">{t.logistics.step2.time}</span>
+                                </div>
+                            </div>
+
+                            <div className="relative pl-8">
+                                <span className="absolute -left-[9px] top-0 w-4 h-4 rounded-full bg-indigo-500 ring-4 ring-white"></span>
+                                <h4 className="font-bold text-slate-800">{t.logistics.step3.title}</h4>
+                                <p className="text-sm text-slate-500">{t.logistics.step3.desc}</p>
+                                <div className="mt-2 text-xs grid grid-cols-2 gap-2 max-w-md">
+                                    <div className="border border-slate-200 p-2 rounded">{t.logistics.step3.detail1}</div>
+                                    <div className="border border-slate-200 p-2 rounded">{t.logistics.step3.detail2}</div>
+                                </div>
+                            </div>
+
+                            <div className="relative pl-8">
+                                <span className="absolute -left-[9px] top-0 w-4 h-4 rounded-full bg-emerald-500 ring-4 ring-white"></span>
+                                <h4 className="font-bold text-slate-800">{t.logistics.step4.title}</h4>
+                                <p className="text-sm text-slate-500">{t.logistics.step4.desc}</p>
+                                <div className="mt-2 bg-emerald-50 text-emerald-800 p-3 rounded text-xs inline-block">
+                                    {t.logistics.step4.detail}
+                                </div>
+                            </div>
+                        </div>
+                    </Card>
+                </div>
+            );
+        };
+
+        const MarketIntelligence = ({ lang }) => {
+            const t = TRANSLATIONS[lang];
+            const [searchTerm, setSearchTerm] = useState('');
+            const [selectedBuyer, setSelectedBuyer] = useState(null);
+
+            const filteredBuyers = BUYERS.filter(b => 
+                b.name.toLowerCase().includes(searchTerm.toLowerCase()) || 
+                b.country.toLowerCase().includes(searchTerm.toLowerCase())
+            );
+
+            return (
+                <div className="space-y-8 relative">
+                    <SectionTitle 
+                        title={t.market.title} 
+                        subtitle={t.market.subtitle} 
+                    />
+
+                    {/* Analytics Charts */}
+                    <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                        <Card className="p-6">
+                            <h3 className="font-bold text-slate-800 mb-4">{t.market.chart_supply}</h3>
+                            <div className="h-64 w-full">
+                                <ResponsiveContainer width="100%" height="100%">
+                                    <LineChart data={MARKET_DATA}>
+                                        <CartesianGrid strokeDasharray="3 3" vertical={false} />
+                                        <XAxis dataKey="year" axisLine={false} tickLine={false} />
+                                        <YAxis axisLine={false} tickLine={false} />
+                                        <Tooltip contentStyle={{ borderRadius: '8px', border: 'none', boxShadow: '0 4px 6px -1px rgb(0 0 0 / 0.1)' }} />
+                                        <Legend />
+                                        <Line type="monotone" dataKey="demand" stroke="#3b82f6" strokeWidth={3} name="Demand (MT)" dot={{r:4}} />
+                                        <Line type="monotone" dataKey="supply" stroke="#94a3b8" strokeWidth={3} name="Supply (MT)" dot={{r:4}} />
+                                    </LineChart>
+                                </ResponsiveContainer>
+                            </div>
+                        </Card>
+
+                        <Card className="p-6">
+                            <h3 className="font-bold text-slate-800 mb-4">{t.market.competitor_title}</h3>
+                            <div className="space-y-4">
+                                {[
+                                    { country: 'Indonesia', share: 45, color: 'bg-blue-600', trend: 'Growing' },
+                                    { country: 'Myanmar', share: 20, color: 'bg-slate-400', trend: 'Stable' },
+                                    { country: 'Vietnam', share: 15, color: 'bg-slate-300', trend: 'Declining' },
+                                    { country: 'Sri Lanka', share: 10, color: 'bg-slate-200', trend: 'Niche High Quality' },
+                                ].map((c) => (
+                                    <div key={c.country}>
+                                        <div className="flex justify-between text-sm mb-1">
+                                            <span className="font-semibold text-slate-700">{c.country}</span>
+                                            <span className="text-slate-500">{c.share}% {t.market.share}</span>
+                                        </div>
+                                        <div className="w-full bg-slate-100 rounded-full h-2.5">
+                                            <div className={`${c.color} h-2.5 rounded-full`} style={{ width: `${c.share}%` }}></div>
+                                        </div>
+                                    </div>
+                                ))}
+                            </div>
+                            
+                            <div className="mt-6 pt-6 border-t border-slate-100">
+                                <h4 className="text-sm font-bold text-slate-800 mb-2">{t.market.specs_title}</h4>
+                                <table className="w-full text-xs text-left">
+                                    <thead>
+                                        <tr className="text-slate-500 border-b border-slate-100">
+                                            <th className="pb-2">{t.market.col_length}</th>
+                                            <th className="pb-2">{t.market.col_type}</th>
+                                            <th className="pb-2">{t.market.col_market}</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody className="text-slate-600">
+                                        {SUPPLY_SPECS.map((s, i) => (
+                                            <tr key={i} className="border-b border-slate-50 last:border-0">
+                                                <td className="py-2">{s.length}</td>
+                                                <td className="py-2">{s.grade}</td>
+                                                <td className="py-2">{s.region} Origin</td>
+                                            </tr>
+                                        ))}
+                                    </tbody>
+                                </table>
+                            </div>
+                        </Card>
+                    </div>
+
+                    {/* Buyer Database */}
+                    <Card className="overflow-hidden">
+                        <div className="p-6 border-b border-slate-100 flex flex-col md:flex-row md:items-center justify-between gap-4">
+                            <h3 className="font-bold text-slate-800 flex items-center">
+                                <Users className="mr-2 text-blue-600" size={20} />
+                                {t.market.db_title}
+                            </h3>
+                            <div className="relative">
+                                <input 
+                                    type="text" 
+                                    placeholder={t.market.search_ph} 
+                                    className="pl-9 pr-4 py-2 border border-slate-300 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 outline-none w-full md:w-64 z-10"
+                                    value={searchTerm}
+                                    onChange={(e) => setSearchTerm(e.target.value)}
+                                />
+                                <Search className="absolute left-3 top-2.5 text-slate-400" size={16} />
+                            </div>
+                        </div>
+                        <div className="overflow-x-auto">
+                            <table className="w-full text-sm text-left">
+                                <thead className="bg-slate-50 text-slate-500 font-medium uppercase text-xs">
+                                    <tr>
+                                        <th className="px-6 py-4">{t.market.col_company}</th>
+                                        <th className="px-6 py-4">{t.market.col_country}</th>
+                                        <th className="px-6 py-4">{t.market.col_loc}</th>
+                                        <th className="px-6 py-4">{t.market.col_type_db}</th>
+                                        <th className="px-6 py-4">{t.market.col_action}</th>
+                                    </tr>
+                                </thead>
+                                <tbody className="divide-y divide-slate-100">
+                                    {filteredBuyers.map((buyer) => (
+                                        <tr key={buyer.id} className="hover:bg-blue-50 transition-colors">
+                                            <td className="px-6 py-4 font-semibold text-slate-800">{buyer.name}</td>
+                                            <td className="px-6 py-4">
+                                                <Badge color={buyer.country === 'India' ? 'blue' : 'green'}>{buyer.country}</Badge>
+                                            </td>
+                                            <td className="px-6 py-4 text-slate-600">{buyer.city}</td>
+                                            <td className="px-6 py-4 text-slate-500">{buyer.type}</td>
+                                            <td className="px-6 py-4">
+                                                <button 
+                                                    onClick={() => setSelectedBuyer(buyer)}
+                                                    className="text-blue-600 hover:text-blue-800 font-medium text-xs border border-blue-200 hover:border-blue-600 px-3 py-1 rounded transition-colors cursor-pointer"
+                                                >
+                                                    {t.market.view_profile}
+                                                </button>
+                                            </td>
+                                        </tr>
+                                    ))}
+                                </tbody>
+                            </table>
+                            {filteredBuyers.length === 0 && (
+                                <div className="p-8 text-center text-slate-400">{t.market.no_results}</div>
+                            )}
+                        </div>
+                    </Card>
+
+                    {/* Buyer Detail Modal */}
+                    {selectedBuyer && (
+                        <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+                            <div className="absolute inset-0 bg-black/60 backdrop-blur-sm" onClick={() => setSelectedBuyer(null)}></div>
+                            <div className="bg-white rounded-xl shadow-2xl w-full max-w-lg relative z-10 overflow-hidden animate-fadeIn">
+                                <div className="bg-slate-900 text-white p-6 flex justify-between items-start">
+                                    <div>
+                                        <h3 className="text-xl font-bold">{selectedBuyer.name}</h3>
+                                        <p className="text-blue-300 text-sm mt-1 flex items-center">
+                                            <MapPin size={14} className="mr-1" />
+                                            {selectedBuyer.city}, {selectedBuyer.country}
+                                        </p>
+                                    </div>
+                                    <button 
+                                        onClick={() => setSelectedBuyer(null)}
+                                        className="text-slate-400 hover:text-white"
+                                    >
+                                        <X size={24} />
+                                    </button>
+                                </div>
+                                
+                                <div className="p-6 space-y-6">
+                                    <div>
+                                        <h4 className="text-sm font-bold text-slate-500 uppercase tracking-wider mb-3">{t.market.contact_info}</h4>
+                                        <div className="space-y-3">
+                                            <div className="flex items-center text-slate-700">
+                                                <Mail className="w-5 h-5 text-blue-600 mr-3" />
+                                                <span>{selectedBuyer.email}</span>
+                                            </div>
+                                            <div className="flex items-center text-slate-700">
+                                                <Phone className="w-5 h-5 text-blue-600 mr-3" />
+                                                <span>{selectedBuyer.phone}</span>
+                                            </div>
+                                            <div className="flex items-center text-slate-700">
+                                                <Briefcase className="w-5 h-5 text-blue-600 mr-3" />
+                                                <span>{selectedBuyer.type}</span>
+                                            </div>
+                                        </div>
+                                    </div>
+
+                                    <div className="pt-4 border-t border-slate-100">
+                                        <h4 className="text-sm font-bold text-slate-500 uppercase tracking-wider mb-3">{t.market.req_info}</h4>
+                                        <div className="grid grid-cols-2 gap-4">
+                                            <div className="bg-slate-50 p-3 rounded border border-slate-200">
+                                                <span className="text-xs text-slate-500 block">Monthly Demand</span>
+                                                <span className="font-bold text-slate-800">{selectedBuyer.demand}</span>
+                                            </div>
+                                            <div className="bg-slate-50 p-3 rounded border border-slate-200">
+                                                <span className="text-xs text-slate-500 block">Payment Terms</span>
+                                                <span className="font-bold text-slate-800">{selectedBuyer.terms}</span>
+                                            </div>
+                                        </div>
+                                    </div>
+
+                                    <button 
+                                        onClick={() => setSelectedBuyer(null)}
+                                        className="w-full bg-slate-100 hover:bg-slate-200 text-slate-800 font-semibold py-3 rounded-lg transition-colors"
+                                    >
+                                        {t.market.close}
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+                    )}
+                </div>
+            );
+        };
+
+        // --- Main App Shell ---
+
+        const App = () => {
+            const [activeView, setActiveView] = useState('overview');
+            const [lang, setLang] = useState('en'); // 'en' or 'id'
+            const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
+
+            const t = TRANSLATIONS[lang];
+
+            const NavItem = ({ id, label, icon: Icon }) => (
+                <button
+                    onClick={() => {
+                        setActiveView(id);
+                        setMobileMenuOpen(false);
+                    }}
+                    className={`w-full flex items-center px-6 py-4 text-sm font-medium transition-colors cursor-pointer ${
+                        activeView === id 
+                        ? 'text-blue-400 bg-slate-800 border-r-4 border-blue-500' 
+                        : 'text-slate-400 hover:text-slate-200 hover:bg-slate-800'
+                    }`}
+                >
+                    <Icon size={20} className="mr-3" />
+                    {label}
+                </button>
+            );
+
+            return (
+                <div className="min-h-screen bg-slate-100 font-sans text-slate-900 flex flex-col md:flex-row">
+                    
+                    {/* Sidebar Navigation */}
+                    <aside className={`fixed md:relative z-30 w-64 h-full bg-slate-900 shadow-xl transition-transform duration-300 ease-in-out ${mobileMenuOpen ? 'translate-x-0' : '-translate-x-full md:translate-x-0'} flex flex-col`}>
+                        {/* Clickable Sidebar Header "Card" */}
+                        <div 
+                            onClick={() => setActiveView('buyers')}
+                            className="p-6 border-b border-slate-800 cursor-pointer hover:bg-slate-800 transition-colors group shrink-0"
+                            title={lang === 'en' ? "Go to Market & Buyers" : "Ke Pasar & Pembeli"}
+                        >
+                            <div className="flex items-center space-x-2 text-white">
+                                <div className="w-8 h-8 bg-blue-600 rounded flex items-center justify-center group-hover:bg-blue-500 transition-colors">
+                                    <Ship size={18} className="text-white" />
+                                </div>
+                                <div>
+                                    <h1 className="font-bold leading-none tracking-tight">EXPORT HUB</h1>
+                                    <p className="text-[10px] text-blue-400 tracking-widest mt-1">2026 EDITION</p>
+                                </div>
+                            </div>
+                        </div>
+
+                        {/* Language Toggle */}
+                        <div className="px-6 pt-4 shrink-0">
+                            <div className="bg-slate-800 p-1 rounded flex">
+                                <button 
+                                    onClick={() => setLang('en')}
+                                    className={`flex-1 text-xs font-bold py-1 rounded transition-colors ${lang === 'en' ? 'bg-blue-600 text-white' : 'text-slate-400 hover:text-white'}`}
+                                >
+                                    EN
+                                </button>
+                                <button 
+                                    onClick={() => setLang('id')}
+                                    className={`flex-1 text-xs font-bold py-1 rounded transition-colors ${lang === 'id' ? 'bg-blue-600 text-white' : 'text-slate-400 hover:text-white'}`}
+                                >
+                                    ID
+                                </button>
+                            </div>
+                        </div>
+
+                        <nav className="mt-4 flex-1 overflow-y-auto">
+                            <NavItem id="overview" label={t.nav.overview} icon={FileText} />
+                            <NavItem id="calculator" label={t.nav.calculator} icon={Calculator} />
+                            <NavItem id="logistics" label={t.nav.logistics} icon={Truck} />
+                            <NavItem id="buyers" label={t.nav.buyers} icon={Globe} />
+                        </nav>
+                        
+                        {/* Footer with Updated Profile */}
+                        <div className="w-full p-6 border-t border-slate-800 shrink-0">
+                            <div className="flex items-center space-x-3 text-slate-400">
+                                <div className="w-8 h-8 rounded-full bg-slate-800 flex items-center justify-center text-xs font-bold">SA</div>
+                                <div className="text-xs">
+                                    <p className="text-white font-medium">Sumariyanto & Ariansyah Supu</p>
+                                    <p>{t.nav.role}</p>
+                                </div>
+                            </div>
+                        </div>
+                    </aside>
+
+                    {/* Mobile Header */}
+                    <div className="md:hidden bg-slate-900 text-white p-4 flex justify-between items-center sticky top-0 z-20 shadow-md">
+                        <div className="font-bold">EXPORT HUB 2026</div>
+                        <button onClick={() => setMobileMenuOpen(!mobileMenuOpen)}>
+                            {mobileMenuOpen ? <X /> : <Menu />}
+                        </button>
+                    </div>
+
+                    {/* Main Content Area */}
+                    <main className="flex-1 p-4 md:p-8 overflow-y-auto h-screen">
+                        <div className="max-w-6xl mx-auto pb-12">
+                            {activeView === 'overview' && <Overview setView={setActiveView} lang={lang} />}
+                            {activeView === 'calculator' && <PricingCalculator lang={lang} />}
+                            {activeView === 'logistics' && <LogisticsBreakdown lang={lang} />}
+                            {activeView === 'buyers' && <MarketIntelligence lang={lang} />}
+                        </div>
+                    </main>
+
+                    {/* Overlay for mobile menu */}
+                    {mobileMenuOpen && (
+                        <div 
+                            className="fixed inset-0 bg-black bg-opacity-50 z-20 md:hidden"
+                            onClick={() => setMobileMenuOpen(false)}
+                        ></div>
+                    )}
+                </div>
+            );
+        };
+
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(<App />);
+    </script>
+</body>
+</html>
