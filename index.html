@@ -102,164 +102,13 @@
             }
         };
 
-        // --- 3. DATA PROCESSING LOGIC (DIPINDAHKAN KE MAIN THREAD) ---
-        // Konstanta
-        const WHITELIST_BRANDS = ['KOMATSU', 'SCANIA', 'VOLVO', 'MERCEDES BENZ'];
-        const PLANT_MAP = { "PL01": "MSJ", "PL03": "BE", "PL14": "TJP", "PL22": "MRW", "PL06": "KALSEL", "PL09": "MME", "PL15": "GAM", "PL18": "ABP", "PL19": "GSP" };
+        // --- 3. DATA PROCESSING LOGIC (DIHAPUS UNTUK MEMPERINGAN APP) ---
+        // Logika internal untuk FFF, PROS, dan Block Master telah dihapus karena sekarang menggunakan aplikasi eksternal.
 
-        // Helper Excel
-        const normalizeHeader = (header) => String(header).toLowerCase().replace(/[^a-z0-9]/g, '');
-        const mapHeaders = (headersRow) => { const map = {}; headersRow.forEach((h, i) => { map[normalizeHeader(h)] = i; }); return map; };
-        const readExcelFromBuffer = (buffer) => { 
-            const data = new Uint8Array(buffer); 
-            const workbook = XLSX.read(data, { type: 'array', cellDates: true }); 
-            return XLSX.utils.sheet_to_json(workbook.Sheets[workbook.SheetNames[0]], { header: 1 }); 
-        };
-
-        // Fungsi Update Status di UI
         const updateStatus = (msg) => {
             const el = document.getElementById('module-msg');
             if(el) el.textContent = msg;
         };
-
-        // --- LOGIC: Block Master ---
-        async function processBlockMaster({ mb51Buffer, sohBuffer }) {
-            updateStatus('Processing MB51...');
-            await new Promise(r => setTimeout(r, 10)); // Yield UI
-
-            const rawMB51 = readExcelFromBuffer(mb51Buffer);
-            const hMB51 = mapHeaders(rawMB51[0]);
-            const idxMat = hMB51['material']??hMB51['materialnumber'];
-            const idxQty = hMB51['qtyinunitofentry']??hMB51['quantity'];
-            const mb51Map = {};
-            for (let i = 1; i < rawMB51.length; i++) {
-                const row = rawMB51[i]; const mat = String(row[idxMat]||'').trim();
-                if (!mat) continue;
-                if (!mb51Map[mat]) mb51Map[mat] = { freq: 0, totalQty: 0 };
-                mb51Map[mat].freq++; mb51Map[mat].totalQty += (parseFloat(row[idxQty])||0);
-            }
-
-            updateStatus('Aggregating SOH...');
-            await new Promise(r => setTimeout(r, 10));
-
-            const rawSOH = readExcelFromBuffer(sohBuffer);
-            const hSOH = mapHeaders(rawSOH[0]);
-            const idxSMat = hSOH['material']??hSOH['materialnumber'];
-            const idxSQty = hSOH['unrestricted']??hSOH['unrestrictedstock'];
-            const idxSVal = hSOH['valueunrestricted']??hSOH['valueunrestrictedstock'];
-            const idxDesc = hSOH['materialdescription']??hSOH['description'];
-            
-            const results = []; const processedMats = new Set();
-            for (let i = 1; i < rawSOH.length; i++) {
-                const row = rawSOH[i]; const mat = String(row[idxSMat]||'').trim();
-                if (!mat || processedMats.has(mat)) continue;
-                const activity = mb51Map[mat] || { freq: 0, totalQty: 0 };
-                results.push({ matCode: mat, description: row[idxDesc]||'', totalUnrestricted: parseFloat(row[idxSQty])||0, totalValue: parseFloat(row[idxSVal])||0, movementFreq: activity.freq, totalMovementQty: activity.totalQty, status: activity.freq === 0 ? "No Movement" : "Active" });
-                processedMats.add(mat);
-            }
-            results.sort((a, b) => b.totalValue - a.totalValue);
-            return results;
-        }
-
-        // --- LOGIC: FFF Analysis ---
-        async function processFFF({ brandBuffer, mb51Buffers }) {
-            updateStatus('Parsing Asset Data...');
-            await new Promise(r => setTimeout(r, 10));
-
-            const brandData = readExcelFromBuffer(brandBuffer);
-            const hBrand = mapHeaders(brandData[0]);
-            const idxEq = hBrand['equipmentid']??hBrand['equipment'];
-            const idxBr = hBrand['brand']??hBrand['manufacturer'];
-            const assetMap = {};
-            for(let i=1; i<brandData.length; i++) {
-                const row = brandData[i]; const eq = String(row[idxEq]||'').trim().replace(/\\s+/g, '');
-                if(eq) assetMap[eq] = { brand: String(row[idxBr]||'UNKNOWN').trim().toUpperCase() };
-            }
-
-            let transactions = [];
-            for (let f=0; f<mb51Buffers.length; f++) {
-                updateStatus(`Processing File ${f+1}...`);
-                await new Promise(r => setTimeout(r, 10));
-
-                const raw = readExcelFromBuffer(mb51Buffers[f]);
-                const h = mapHeaders(raw[0]);
-                const idxMat = h['material']??h['materialno']; const idxDesc = h['materialdescription']??h['description']; const idxMpn = h['mpn']??h['manufacturerpartnumber']; const idxEqMb = h['equipment']??h['equipmentid'];
-                
-                for(let j=1; j<raw.length; j++) {
-                    const row = raw[j]; const mat = String(row[idxMat]||'').trim(); const desc = String(row[idxDesc]||'').trim().toUpperCase(); const mpn = String(row[idxMpn]||'').trim(); const eq = String(row[idxEqMb]||'').trim().replace(/\\s+/g, '');
-                    if(!mat || mat.startsWith('5') || /^\\d/.test(eq)) continue;
-                    const asset = assetMap[eq]; let brand = asset?.brand || 'UNKNOWN';
-                    if(brand === 'RIIPING DOZING') brand = 'KOMATSU';
-                    if(!WHITELIST_BRANDS.includes(brand)) continue;
-                    transactions.push({ matCode: mat, desc, mpn, brand, isGenuine: desc.includes(brand) });
-                }
-            }
-
-            const mpnGroups = {};
-            transactions.forEach(tx => {
-                if(!tx.mpn || tx.mpn.length < 2) return;
-                if(!mpnGroups[tx.mpn]) mpnGroups[tx.mpn] = {};
-                if(!mpnGroups[tx.mpn][tx.matCode]) mpnGroups[tx.mpn][tx.matCode] = { ...tx, count: 0 };
-                mpnGroups[tx.mpn][tx.matCode].count++;
-            });
-
-            const final = [];
-            Object.keys(mpnGroups).forEach(mpn => {
-                const list = Object.values(mpnGroups[mpn]);
-                if(list.length > 1) {
-                    const genuineCount = list.filter(m => m.isGenuine).length;
-                    let category = genuineCount >= 2 ? "Two Way" : (genuineCount === 1 ? "One Way" : "Not");
-                    list.sort((a,b) => a.matCode.localeCompare(b.matCode));
-                    list.forEach((mat, idx) => {
-                        let rec = mat.isGenuine ? "OK" : "NOK";
-                        let note = mat.isGenuine ? "Genuine" : "Low Freq";
-                        final.push({ ...mat, category, recommendation: rec, logicNote: note, rowSpan: idx === 0 ? list.length : 0 });
-                    });
-                }
-            });
-            return final;
-        }
-
-        // --- LOGIC: PROS Analysis ---
-        async function processPROS({ mb52Buffer, prBuffer }) {
-            updateStatus('Analyzing Stock vs PR...');
-            await new Promise(r => setTimeout(r, 10));
-
-            const rawStock = readExcelFromBuffer(mb52Buffer); const hStock = mapHeaders(rawStock[0]);
-            const idxSMat = hStock['material']??hStock['materialnumber']; const idxSQty = hStock['unrestricted']??hStock['unrestrictedstock']; const idxSVal = hStock['valueunrestricted']??hStock['valueunrestrictedstock'];
-            const stockMap = {};
-            for(let i=1; i<rawStock.length; i++) {
-                const row = rawStock[i]; const mat = String(row[idxSMat]||'').trim();
-                if(!mat) continue; if(!stockMap[mat]) stockMap[mat] = { qty: 0, val: 0 };
-                stockMap[mat].qty += (parseFloat(row[idxSQty])||0); stockMap[mat].val += (parseFloat(row[idxSVal])||0);
-            }
-
-            const rawPR = readExcelFromBuffer(prBuffer); const hPR = mapHeaders(rawPR[0]);
-            const idxPMat = hPR['material']??hPR['materialnumber']; const idxPNo = hPR['purchaserequisition']??hPR['prnumber']; const idxPQty = hPR['quantity']??hPR['qty']; const idxPlant = hPR['plant']??hPR['site'];
-            
-            let details = []; const dynamicStock = JSON.parse(JSON.stringify(stockMap));
-            
-            for(let i=1; i<rawPR.length; i++) {
-                const row = rawPR[i]; const mat = String(row[idxPMat]||'').trim(); const qty = parseFloat(row[idxPQty])||0; const plant = row[idxPlant] ? String(row[idxPlant]) : 'Unknown';
-                let soh = dynamicStock[mat]?.qty || 0; let unitPrice = dynamicStock[mat]?.qty ? (dynamicStock[mat].val / dynamicStock[mat].qty) : 0;
-                let status = "Out of Stock"; let rec = "Proceed with PO"; let alloc = 0; let color = "text-red-600";
-                
-                if(soh >= qty) { status = "Full Allocation"; rec = "Create STO"; color = "text-green-600"; alloc = qty; if(dynamicStock[mat]) dynamicStock[mat].qty -= qty; }
-                else if (soh > 0) { status = "Partial Allocation"; rec = "Create STO (Partial)"; color = "text-yellow-600"; alloc = soh; if(dynamicStock[mat]) dynamicStock[mat].qty = 0; }
-                
-                details.push({ _prNumber: row[idxPNo]||'-', _matCode: mat, _qtyReq: qty, _plantCode: plant, _status: status, _recommendation: rec, _allocation: alloc, _stoValue: alloc * unitPrice, _color: color });
-            }
-            
-            const summaryMap = {};
-            details.forEach(d => {
-                const loc = PLANT_MAP[d._plantCode] || d._plantCode;
-                if(!summaryMap[loc]) summaryMap[loc] = { location: loc, fullStoCount: 0, partialStoCount: 0, poCount: 0, totalValue: 0 };
-                if(d._recommendation.includes("STO")) { summaryMap[loc].totalValue += d._stoValue; if(d._status.includes("Full")) summaryMap[loc].fullStoCount++; else summaryMap[loc].partialStoCount++; }
-                else { summaryMap[loc].poCount++; }
-            });
-            
-            return { details, summary: Object.values(summaryMap) };
-        }
 
         // --- 4. State Management Sederhana ---
         const AppState = { currentView: 'home', navbarScrolled: false, mobileMenuOpen: false };
@@ -297,7 +146,7 @@
         function renderHero() {
             return `
             <div id="home" class="relative h-screen flex items-center justify-center overflow-hidden bg-slate-900">
-              <div class="absolute inset-0 z-0"><img src="https://images.unsplash.com/photo-1586528116311-ad8dd3c8310d?ixlib=rb-4.0.3&auto=format&fit=crop&w=2070&q=80" class="w-full h-full object-cover opacity-40"><div class="absolute inset-0 bg-gradient-to-r from-slate-900 via-slate-900/80 to-transparent"></div></div>
+              <div class="absolute inset-0 z-0"><img src="https://images.unsplash.com/photo-1586528116311-ad8dd3c8310d?lib=rb-4.0.3&auto=format&fit=crop&w=2070&q=80" class="w-full h-full object-cover opacity-40"><div class="absolute inset-0 bg-gradient-to-r from-slate-900 via-slate-900/80 to-transparent"></div></div>
               <div class="relative z-10 max-w-7xl mx-auto px-4 flex flex-col justify-center h-full">
                 <div class="max-w-3xl">
                   <div class="inline-flex items-center space-x-2 bg-orange-500/10 border border-orange-500/30 rounded-full px-4 py-1 mb-6 backdrop-blur-sm"><span class="flex h-2 w-2 rounded-full bg-orange-500 animate-pulse"></span><span class="text-orange-400 text-sm font-semibold tracking-wide uppercase">Operational Efficiency Optimized</span></div>
@@ -496,7 +345,7 @@
             </div>`;
         }
 
-        // --- TAMBAHAN PENTING: FUNGSI RENDERMODULE ---
+        // --- FUNGSI RENDERMODULE ---
         function renderModule(title, icon, color, inputsHTML, onRun) {
             return `
             <div class="min-h-screen pt-24 pb-12 bg-slate-50 text-slate-900 animate-in">
@@ -545,17 +394,49 @@
                  <div class="min-h-screen pt-24 pb-12 bg-slate-900 text-white animate-in">
                     <div class="max-w-7xl mx-auto px-4 text-center mb-12"><h2 class="text-4xl font-extrabold mb-4">Analysis Tools</h2><p class="text-slate-400">Advanced data processing modules.</p></div>
                     <div class="max-w-7xl mx-auto px-4 grid grid-cols-1 md:grid-cols-3 gap-8">
-                        <div onclick="window.handleNavClick('fff')" class="bg-slate-800 rounded-2xl p-8 border border-slate-700 hover:border-orange-500 cursor-pointer group relative overflow-hidden"><div class="absolute top-0 right-0 w-32 h-32 bg-orange-500 opacity-10 rounded-bl-full -mr-8 -mt-8"></div><div class="w-16 h-16 bg-orange-500 rounded-2xl flex items-center justify-center mb-6"><i data-lucide="git-merge" class="text-white w-8 h-8"></i></div><h3 class="text-xl font-bold mb-3">FFF Class Analysis</h3><p class="text-slate-400 text-sm mb-6">Detect Form-Fit-Function interchangeability.</p><span class="text-xs font-bold uppercase text-slate-500 group-hover:text-white flex items-center">Launch Tool <i data-lucide="arrow-right" class="ml-2 w-4 h-4"></i></span></div>
-                        <div onclick="window.handleNavClick('pros')" class="bg-slate-800 rounded-2xl p-8 border border-slate-700 hover:border-blue-500 cursor-pointer group relative overflow-hidden"><div class="absolute top-0 right-0 w-32 h-32 bg-blue-600 opacity-10 rounded-bl-full -mr-8 -mt-8"></div><div class="w-16 h-16 bg-blue-600 rounded-2xl flex items-center justify-center mb-6"><i data-lucide="bar-chart-3" class="text-white w-8 h-8"></i></div><h3 class="text-xl font-bold mb-3">PR OS Analysis</h3><p class="text-slate-400 text-sm mb-6">Prioritize stock allocation over purchasing.</p><span class="text-xs font-bold uppercase text-slate-500 group-hover:text-white flex items-center">Launch Tool <i data-lucide="arrow-right" class="ml-2 w-4 h-4"></i></span></div>
-                        <div onclick="window.handleNavClick('block')" class="bg-slate-800 rounded-2xl p-8 border border-slate-700 hover:border-slate-500 cursor-pointer group relative overflow-hidden"><div class="absolute top-0 right-0 w-32 h-32 bg-slate-600 opacity-10 rounded-bl-full -mr-8 -mt-8"></div><div class="w-16 h-16 bg-slate-600 rounded-2xl flex items-center justify-center mb-6"><i data-lucide="alert-triangle" class="text-white w-8 h-8"></i></div><h3 class="text-xl font-bold mb-3">Block Master</h3><p class="text-slate-400 text-sm mb-6">Analyze deadstock and blockage status.</p><span class="text-xs font-bold uppercase text-slate-500 group-hover:text-white flex items-center">Launch Tool <i data-lucide="arrow-right" class="ml-2 w-4 h-4"></i></span></div>
+                        <!-- MODIFIKASI: FFF Analysis sekarang direct link -->
+                        <div onclick="window.runFFF()" class="bg-slate-800 rounded-2xl p-8 border border-slate-700 hover:border-orange-500 cursor-pointer group relative overflow-hidden"><div class="absolute top-0 right-0 w-32 h-32 bg-orange-500 opacity-10 rounded-bl-full -mr-8 -mt-8"></div><div class="w-16 h-16 bg-orange-500 rounded-2xl flex items-center justify-center mb-6"><i data-lucide="git-merge" class="text-white w-8 h-8"></i></div><h3 class="text-xl font-bold mb-3">FFF Class Analysis</h3><p class="text-slate-400 text-sm mb-6">Detect Form-Fit-Function interchangeability.</p><span class="text-xs font-bold uppercase text-slate-500 group-hover:text-white flex items-center">Launch Tool <i data-lucide="arrow-right" class="ml-2 w-4 h-4"></i></span></div>
+                        
+                        <!-- MODIFIKASI: PR OS Analysis sekarang direct link -->
+                        <div onclick="window.runPROS()" class="bg-slate-800 rounded-2xl p-8 border border-slate-700 hover:border-blue-500 cursor-pointer group relative overflow-hidden"><div class="absolute top-0 right-0 w-32 h-32 bg-blue-600 opacity-10 rounded-bl-full -mr-8 -mt-8"></div><div class="w-16 h-16 bg-blue-600 rounded-2xl flex items-center justify-center mb-6"><i data-lucide="bar-chart-3" class="text-white w-8 h-8"></i></div><h3 class="text-xl font-bold mb-3">PR OS Analysis</h3><p class="text-slate-400 text-sm mb-6">Prioritize stock allocation over purchasing.</p><span class="text-xs font-bold uppercase text-slate-500 group-hover:text-white flex items-center">Launch Tool <i data-lucide="arrow-right" class="ml-2 w-4 h-4"></i></span></div>
+                        
+                        <!-- MODIFIKASI: Block Master sekarang direct link -->
+                        <div onclick="window.runBlock()" class="bg-slate-800 rounded-2xl p-8 border border-slate-700 hover:border-slate-500 cursor-pointer group relative overflow-hidden"><div class="absolute top-0 right-0 w-32 h-32 bg-slate-600 opacity-10 rounded-bl-full -mr-8 -mt-8"></div><div class="w-16 h-16 bg-slate-600 rounded-2xl flex items-center justify-center mb-6"><i data-lucide="alert-triangle" class="text-white w-8 h-8"></i></div><h3 class="text-xl font-bold mb-3">Block Master</h3><p class="text-slate-400 text-sm mb-6">Analyze deadstock and blockage status.</p><span class="text-xs font-bold uppercase text-slate-500 group-hover:text-white flex items-center">Launch Tool <i data-lucide="arrow-right" class="ml-2 w-4 h-4"></i></span></div>
                     </div>
                  </div>`;
             } else if (AppState.currentView === 'fff') {
-                content += renderModule('FFF Analysis', 'git-merge', 'orange', `<div class="border-2 border-dashed border-slate-300 p-8 rounded-xl text-center hover:bg-slate-50"><h3 class="font-bold mb-2">1. Brand Data</h3><input type="file" id="fff-brand" accept=".xlsx" class="block mx-auto text-sm text-slate-500 file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-sm file:font-semibold file:bg-orange-50 file:text-orange-700 hover:file:bg-orange-100"></div><div class="border-2 border-dashed border-slate-300 p-8 rounded-xl text-center hover:bg-slate-50"><h3 class="font-bold mb-2">2. MB51 History</h3><input type="file" id="fff-mb51" multiple accept=".xlsx" class="block mx-auto text-sm text-slate-500 file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-sm file:font-semibold file:bg-orange-50 file:text-orange-700 hover:file:bg-orange-100"></div>`, "window.runFFF()");
+                 // MODIFIKASI: Menghapus input file dan mengubah tampilan untuk redirect ke aplikasi eksternal
+                 content += renderModule('FFF Class Analysis', 'git-merge', 'orange', 
+                    `<div class="col-span-1 md:col-span-2 text-center p-8">
+                        <div class="inline-block p-4 rounded-full bg-slate-100 mb-4"><i data-lucide="external-link" class="w-8 h-8 text-slate-500"></i></div>
+                        <h3 class="text-xl font-bold text-slate-800 mb-2">External Module</h3>
+                        <p class="text-slate-600 mb-4">This analysis module has been moved to a dedicated application for better performance and stability.</p>
+                        <p class="text-sm text-slate-500">Click the button below to access the FFF Class Analysis tool.</p>
+                     </div>`, 
+                    "window.runFFF()"
+                );
             } else if (AppState.currentView === 'pros') {
-                content += renderModule('PROS Analysis', 'bar-chart-3', 'blue', `<div class="border-2 border-dashed border-slate-300 p-8 rounded-xl text-center hover:bg-slate-50"><h3 class="font-bold mb-2">1. MB52 Stock</h3><input type="file" id="pros-mb52" accept=".xlsx" class="block mx-auto text-sm text-slate-500 file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-sm file:font-semibold file:bg-blue-50 file:text-blue-700 hover:file:bg-blue-100"></div><div class="border-2 border-dashed border-slate-300 p-8 rounded-xl text-center hover:bg-slate-50"><h3 class="font-bold mb-2">2. PR Outstanding</h3><input type="file" id="pros-pr" accept=".xlsx" class="block mx-auto text-sm text-slate-500 file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-sm file:font-semibold file:bg-blue-50 file:text-blue-700 hover:file:bg-blue-100"></div>`, "window.runPROS()");
+                 // MODIFIKASI: Menghapus input file dan mengubah tampilan untuk redirect ke aplikasi eksternal
+                 content += renderModule('PR OS Analysis', 'bar-chart-3', 'blue', 
+                    `<div class="col-span-1 md:col-span-2 text-center p-8">
+                        <div class="inline-block p-4 rounded-full bg-slate-100 mb-4"><i data-lucide="external-link" class="w-8 h-8 text-slate-500"></i></div>
+                        <h3 class="text-xl font-bold text-slate-800 mb-2">External Module</h3>
+                        <p class="text-slate-600 mb-4">This analysis module has been moved to a dedicated application for better performance and stability.</p>
+                        <p class="text-sm text-slate-500">Click the button below to access the PR Outstanding Analysis tool.</p>
+                     </div>`, 
+                    "window.runPROS()"
+                );
             } else if (AppState.currentView === 'block') {
-                 content += renderModule('Block Master', 'alert-triangle', 'slate', `<div class="border-2 border-dashed border-slate-300 p-8 rounded-xl text-center hover:bg-slate-50"><h3 class="font-bold mb-2">1. MB51 History</h3><input type="file" id="bm-mb51" accept=".xlsx" class="block mx-auto text-sm text-slate-500 file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-sm file:font-semibold file:bg-slate-100 file:text-slate-700 hover:file:bg-slate-200"></div><div class="border-2 border-dashed border-slate-300 p-8 rounded-xl text-center hover:bg-slate-50"><h3 class="font-bold mb-2">2. SOH Stock</h3><input type="file" id="bm-soh" accept=".xlsx" class="block mx-auto text-sm text-slate-500 file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-sm file:font-semibold file:bg-slate-100 file:text-slate-700 hover:file:bg-slate-200"></div>`, "window.runBlock()");
+                 // MODIFIKASI: Menghapus input file dan mengubah tampilan untuk redirect ke aplikasi eksternal
+                 content += renderModule('Block Master', 'alert-triangle', 'slate', 
+                    `<div class="col-span-1 md:col-span-2 text-center p-8">
+                        <div class="inline-block p-4 rounded-full bg-slate-100 mb-4"><i data-lucide="external-link" class="w-8 h-8 text-slate-500"></i></div>
+                        <h3 class="text-xl font-bold text-slate-800 mb-2">External Module</h3>
+                        <p class="text-slate-600 mb-4">This analysis module has been moved to a dedicated application for better performance and stability.</p>
+                        <p class="text-sm text-slate-500">Click the button below to access the Block Master Analysis tool.</p>
+                     </div>`, 
+                    "window.runBlock()"
+                );
             }
             root.insertAdjacentHTML('beforeend', content);
             
@@ -661,56 +542,17 @@
             } catch(err) { console.error(err); alert("Failed to submit."); }
         };
 
-        window.runFFF = async () => {
-             const brandFile = document.getElementById('fff-brand').files[0]; const mb51Files = document.getElementById('fff-mb51').files;
-             if(!brandFile || !mb51Files.length) return alert("Please upload files");
-             toggleLoading('module', true, "Analyzing...");
-             
-             try {
-                 const brandBuffer = await brandFile.arrayBuffer();
-                 const mb51Buffers = await Promise.all(Array.from(mb51Files).map(f => f.arrayBuffer()));
-                 const results = await processFFF({ brandBuffer, mb51Buffers });
-                 toggleLoading('module', false); 
-                 displayResults(results);
-             } catch(e) {
-                 console.error(e);
-                 toggleLoading('module', false);
-                 alert("Error processing files: " + e.message);
-             }
+        // --- DIRECT LINKS FOR EXTERNAL TOOLS ---
+        window.runBlock = () => {
+            window.open('https://block-master-dc-palaran.vercel.app/', '_blank');
         };
 
-        window.runPROS = async () => {
-             const mb52 = document.getElementById('pros-mb52').files[0]; const pr = document.getElementById('pros-pr').files[0];
-             if(!mb52 || !pr) return alert("Upload files");
-             toggleLoading('module', true); 
-             
-             try {
-                 const [b1, b2] = await Promise.all([mb52.arrayBuffer(), pr.arrayBuffer()]);
-                 const result = await processPROS({ mb52Buffer: b1, prBuffer: b2 });
-                 toggleLoading('module', false); 
-                 displayResults(result.details);
-             } catch(e) {
-                 console.error(e);
-                 toggleLoading('module', false);
-                 alert("Error processing files: " + e.message);
-             }
+        window.runPROS = () => {
+            window.open('https://analisis-pr-oustanding-dc-palaran.vercel.app/', '_blank');
         };
 
-         window.runBlock = async () => {
-             const mb51 = document.getElementById('bm-mb51').files[0]; const soh = document.getElementById('bm-soh').files[0];
-             if(!mb51 || !soh) return alert("Upload files");
-             toggleLoading('module', true);
-             
-             try {
-                 const [b1, b2] = await Promise.all([mb51.arrayBuffer(), soh.arrayBuffer()]);
-                 const result = await processBlockMaster({ mb51Buffer: b1, sohBuffer: b2 });
-                 toggleLoading('module', false); 
-                 displayResults(result);
-             } catch(e) {
-                 console.error(e);
-                 toggleLoading('module', false);
-                 alert("Error processing files: " + e.message);
-             }
+        window.runFFF = () => {
+            window.open('https://fff-class.vercel.app/', '_blank');
         };
 
         function toggleLoading(id, show, msg="Processing...") {
