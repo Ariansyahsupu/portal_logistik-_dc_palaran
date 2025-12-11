@@ -41,21 +41,29 @@
         import { getAuth, signInAnonymously, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
         import { getFirestore, collection, addDoc, serverTimestamp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
 
-        // --- Config ---
+        // --- Config & Initialization Safety ---
         let firebaseConfig;
         if (typeof __firebase_config !== 'undefined' && __firebase_config) {
-            try { firebaseConfig = JSON.parse(__firebase_config); } catch (e) { console.error(e); }
+            try { firebaseConfig = JSON.parse(__firebase_config); } catch (e) { console.error("Config Parse Error:", e); }
         }
+        
         if (!firebaseConfig) {
-             firebaseConfig = { apiKey: "API_KEY_ANDA", authDomain: "PROJECT.firebaseapp.com", projectId: "PROJECT_ID" };
+             firebaseConfig = { apiKey: "", authDomain: "", projectId: "" }; 
         }
 
         let app, auth, db;
+        let isFirebaseAvailable = false;
+
         try {
-            app = initializeApp(firebaseConfig);
-            auth = getAuth(app);
-            db = getFirestore(app);
-        } catch (error) { console.error("Init Error:", error); }
+            if (firebaseConfig.apiKey) {
+                app = initializeApp(firebaseConfig);
+                auth = getAuth(app);
+                db = getFirestore(app);
+                isFirebaseAvailable = true;
+            }
+        } catch (error) { 
+            console.error("Firebase Init Error:", error); 
+        }
 
         const appId = typeof __app_id !== 'undefined' ? __app_id : 'dc-palaran-app';
         let currentUser = null;
@@ -65,7 +73,7 @@
             currentView: 'home', 
             navbarScrolled: false, 
             mobileMenuOpen: false,
-            reportView: 'YTD', // YTD, Monthly, Weekly
+            reportView: 'YTD', 
             selectedWeek: 1,
             zerpdData: new Map(),
             isZerpdUploaded: false,
@@ -77,7 +85,15 @@
         // --- Utils ---
         const formatIDR = (val) => new Intl.NumberFormat('id-ID', { style: 'currency', currency: 'IDR', maximumFractionDigits: 0 }).format(val);
         const normalizeString = (str) => String(str).toUpperCase().replace(/[^A-Z0-9]/g, '');
-        const renderIcons = () => { if (window.lucide) window.lucide.createIcons(); else setTimeout(renderIcons, 100); };
+        
+        const renderIcons = (retries = 0) => { 
+            if (window.lucide) {
+                window.lucide.createIcons(); 
+            } else if (retries < 20) { 
+                setTimeout(() => renderIcons(retries + 1), 100); 
+            }
+        };
+
         const parseCSV = (text) => {
              const rows = []; let currentRow = [], currentCell = '', inQuotes = false;
              for (let i = 0; i < text.length; i++) {
@@ -94,12 +110,25 @@
              return rows;
         }
 
+        const parseDateFlexible = (dateStr) => {
+            if (!dateStr) return null;
+            let date = new Date(dateStr);
+            if (isNaN(date.getTime())) {
+                const parts = dateStr.split(/[-/]/);
+                if (parts.length === 3) {
+                    date = new Date(`${parts[2]}-${parts[1]}-${parts[0]}`);
+                }
+            }
+            return isNaN(date.getTime()) ? null : date;
+        };
+
         // --- Chart Utils ---
         const generateDonutChartSVG = (data) => {
             const total = data.reduce((acc, curr) => acc + curr.value, 0);
             let cumulativePercent = 0;
             const size = 160;
-            
+            if (total === 0) return `<div class="h-[160px] w-[160px] flex items-center justify-center text-slate-400 text-xs">No Data</div>`;
+
             const getCoords = (percent) => {
                 const x = Math.cos(2 * Math.PI * percent);
                 const y = Math.sin(2 * Math.PI * percent);
@@ -111,112 +140,18 @@
                 const slicePercent = slice.value / total || 0;
                 cumulativePercent += slicePercent;
                 const endPercent = cumulativePercent;
-
                 const [startX, startY] = getCoords(startPercent);
                 const [endX, endY] = getCoords(endPercent);
                 const largeArcFlag = slicePercent > 0.5 ? 1 : 0;
-                
                 if(slicePercent >= 0.999) return `<circle cx="0" cy="0" r="1" fill="${slice.color}" />`;
-
                 const d = `M ${startX} ${startY} A 1 1 0 ${largeArcFlag} 1 ${endX} ${endY} L 0 0`;
                 return `<path d="${d}" fill="${slice.color}" />`;
             }).join('');
 
-            return `
-            <div class="relative flex justify-center items-center">
-                <svg viewBox="-1 -1 2 2" width="${size}" height="${size}" style="transform: rotate(-90deg)">
-                    ${paths}
-                    <circle cx="0" cy="0" r="0.6" fill="white" />
-                </svg>
-                <div class="absolute inset-0 flex flex-col items-center justify-center text-slate-800">
-                   <span class="text-xs font-bold uppercase">Total</span>
-                   <span class="text-xs font-extrabold">${formatIDR(total).replace('Rp', '')}</span>
-                </div>
-            </div>`;
+            return `<div class="relative flex justify-center items-center"><svg viewBox="-1 -1 2 2" width="${size}" height="${size}" style="transform: rotate(-90deg)">${paths}<circle cx="0" cy="0" r="0.6" fill="white" /></svg><div class="absolute inset-0 flex flex-col items-center justify-center text-slate-800"><span class="text-xs font-bold uppercase">Total</span><span class="text-xs font-extrabold">${formatIDR(total).replace('Rp', '')}</span></div></div>`;
         };
 
-        // --- RENDER FUNCTIONS (DEFINED BEFORE USE) ---
-
-        function renderNavbar() {
-            const bg = AppState.navbarScrolled ? 'bg-slate-900 shadow-lg py-3' : 'bg-transparent py-5';
-            return `
-            <nav class="fixed w-full z-50 transition-all duration-300 ${bg}">
-              <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 flex justify-between items-center">
-                <div class="flex items-center space-x-2 cursor-pointer" onclick="window.nav('home')">
-                   <div class="bg-orange-500 p-2 rounded-lg"><i data-lucide="anchor" class="h-6 w-6 text-white"></i></div>
-                   <div class="flex flex-col"><span class="text-xl font-bold tracking-tighter text-white">DC PALARAN</span><span class="text-xs text-orange-400 font-medium tracking-widest">Mining Logistics Hub</span></div>
-                </div>
-                <div class="hidden lg:flex items-center space-x-6">
-                   <button onclick="window.nav('home')" class="text-slate-200 hover:text-orange-500 font-medium text-sm uppercase">Home</button>
-                   <button onclick="window.nav('analysis')" class="text-slate-200 hover:text-orange-500 font-medium text-sm uppercase">Analysis Tools</button>
-                   <button onclick="window.nav('home', 'functions')" class="text-slate-200 hover:text-orange-500 font-medium text-sm uppercase">Functions</button>
-                   <button onclick="window.nav('home', 'process')" class="text-slate-200 hover:text-orange-500 font-medium text-sm uppercase">Process</button>
-                   <button onclick="window.nav('home', 'tracking')" class="text-slate-200 hover:text-orange-500 font-medium text-sm uppercase">Tracking</button>
-                   <button onclick="window.nav('catalog')" class="text-slate-200 hover:text-orange-500 font-medium text-sm uppercase flex items-center"><i data-lucide="file-text" class="w-4 h-4 mr-1"></i> Catalog</button>
-                   <button onclick="window.nav('dashboard')" class="text-slate-200 hover:text-orange-500 font-medium text-sm uppercase flex items-center"><i data-lucide="layout-dashboard" class="w-4 h-4 mr-1"></i> Dashboard</button>
-                   <button onclick="window.nav('home', 'contact')" class="bg-orange-500 hover:bg-orange-600 text-white px-5 py-2 rounded-sm font-bold text-sm uppercase">Check Stock</button>
-                </div>
-                <div class="lg:hidden"><button onclick="window.toggleMenu()" class="text-white"><i data-lucide="menu" class="h-8 w-8"></i></button></div>
-              </div>
-              ${AppState.mobileMenuOpen ? `<div class="lg:hidden bg-slate-900 border-t border-slate-800 p-4 space-y-2"><button onclick="window.nav('home')" class="block text-slate-300 py-2">Home</button><button onclick="window.nav('dashboard')" class="block text-slate-300 py-2">Dashboard</button></div>` : ''}
-            </nav>`;
-        }
-
-        function renderHero() { 
-            return `<div id="home" class="relative h-screen flex items-center justify-center overflow-hidden bg-slate-900"><div class="absolute inset-0 z-0"><img src="https://images.unsplash.com/photo-1586528116311-ad8dd3c8310d?lib=rb-4.0.3&auto=format&fit=crop&w=2070&q=80" class="w-full h-full object-cover opacity-40"><div class="absolute inset-0 bg-gradient-to-r from-slate-900 via-slate-900/80 to-transparent"></div></div><div class="relative z-10 max-w-7xl mx-auto px-4 flex flex-col justify-center h-full"><div class="max-w-3xl"><div class="inline-flex items-center space-x-2 bg-orange-500/10 border border-orange-500/30 rounded-full px-4 py-1 mb-6 backdrop-blur-sm"><span class="flex h-2 w-2 rounded-full bg-orange-500 animate-pulse"></span><span class="text-orange-400 text-sm font-semibold tracking-wide uppercase">Operational Efficiency Optimized</span></div><h1 class="text-5xl md:text-7xl font-extrabold text-white leading-tight mb-6">The Central Nerve of <br/><span class="text-transparent bg-clip-text bg-gradient-to-r from-orange-400 to-orange-600">Mining Logistics</span></h1><p class="text-xl text-slate-300 mb-8 max-w-2xl leading-relaxed">DC Palaran serves as the premier Transit Hub and Buffer Stock Center, ensuring seamless inventory stability.</p><div class="flex flex-col sm:flex-row gap-4"><button onclick="window.nav('analysis')" class="px-8 py-4 bg-orange-500 hover:bg-orange-600 text-slate-900 font-bold rounded-sm shadow-lg flex items-center justify-center">Explore Capabilities <i data-lucide="arrow-right" class="ml-2 h-5 w-5"></i></button><button onclick="window.nav('dashboard')" class="px-8 py-4 border border-slate-500 bg-slate-800/50 backdrop-blur-md text-white font-bold rounded-sm hover:border-orange-500 hover:text-orange-400 flex items-center justify-center"><i data-lucide="activity" class="mr-2 h-5 w-5"></i> Live Dashboard</button></div></div></div></div>`;
-        }
-
-        function renderObjective() { 
-            return `<section class="py-20 bg-white"><div class="max-w-7xl mx-auto px-4 grid grid-cols-1 lg:grid-cols-2 gap-16 items-center"><div><h2 class="text-orange-500 font-bold uppercase tracking-widest text-sm mb-2">Our Core Mission</h2><h3 class="text-4xl font-bold text-slate-900 mb-6">Optimizing Inventory Utilization & Stabilization</h3><p class="text-slate-600 text-lg leading-relaxed mb-6">The primary objective of DC Palaran is to function as the stabilizing force across the entire supply chain.</p><ul class="space-y-4">${['Centralized Buffer Stock Management', 'Reduction of Site-Level Deadstock', 'Rapid Deployment to Satellite Projects'].map(item => `<li class="flex items-center text-slate-700 font-medium"><div class="mr-3 bg-slate-100 p-1 rounded-full text-orange-500"><i data-lucide="shield-check" class="h-5 w-5"></i></div>${item}</li>`).join('')}</ul></div><div class="relative"><div class="absolute -inset-4 bg-orange-100 rounded-xl transform rotate-2"></div><img src="https://images.unsplash.com/photo-1553413077-190dd305871c?ixlib=rb-4.0.3&auto=format&fit=crop&w=1035&q=80" class="relative rounded-lg shadow-2xl w-full object-cover h-96"></div></div></section>`;
-        }
-
-        function renderKeyFunctions() {
-            const funcs = [
-                { icon: 'truck', title: "Strategic Transit Hub", desc: "Acting as the primary consolidation point for vendors." },
-                { icon: 'database', title: "Buffer Stock Center", desc: "Managing volatility through three core pillars." },
-                { icon: 'bar-chart-3', title: "Inventory Stabilization", desc: "The control tower for MIN-MAX levels." }
-            ];
-            return `<section id="functions" class="py-20 bg-slate-50"><div class="max-w-7xl mx-auto px-4 text-center mb-16"><h2 class="text-3xl md:text-4xl font-bold text-slate-900 mb-4">Key Operational Functions</h2><div class="w-24 h-1 bg-orange-500 mx-auto rounded-full"></div></div><div class="max-w-7xl mx-auto px-4 grid grid-cols-1 md:grid-cols-3 gap-8">${funcs.map(f=>`<div class="bg-white rounded-xl shadow-lg p-8 border-t-4 border-transparent hover:border-orange-500 transition-all"><div class="mb-6 bg-slate-50 w-20 h-20 rounded-full flex items-center justify-center"><i data-lucide="${f.icon}" class="h-10 w-10 text-orange-500"></i></div><h3 class="text-xl font-bold text-slate-900 mb-3">${f.title}</h3><p class="text-slate-600">${f.desc}</p></div>`).join('')}</div></section>`;
-        }
-
-        function renderCategories() {
-            const cats = [
-                { name: "Spare Parts", i: "settings", img: "1486262715619-67b85e0b08d3" },
-                { name: "Tyres & Rims", i: "layers", img: "1583258509156-f28822026858" },
-                { name: "Components", i: "cpu", img: "1580894732930-0babd100d356" },
-                { name: "General Supplies", i: "box", img: "1595074474855-f9397f8ef5fd" }
-            ];
-            return `<section id="categories" class="py-20 bg-slate-900 text-white"><div class="max-w-7xl mx-auto px-4 mb-12"><h2 class="text-3xl font-bold mb-2">Material Categories</h2></div><div class="max-w-7xl mx-auto px-4 grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">${cats.map(c=>`<div class="group relative h-96 rounded-lg overflow-hidden cursor-pointer"><img src="https://images.unsplash.com/photo-${c.img}?auto=format&fit=crop&w=600&q=80" class="absolute inset-0 w-full h-full object-cover transition-transform duration-500 group-hover:scale-110"><div class="absolute inset-0 bg-gradient-to-t from-slate-900 via-slate-900/60 to-transparent opacity-90"></div><div class="absolute bottom-0 left-0 p-6 w-full"><div class="bg-orange-500 w-12 h-12 rounded-lg flex items-center justify-center mb-4"><i data-lucide="${c.i}" class="text-white w-6 h-6"></i></div><h3 class="text-xl font-bold mb-2 border-l-4 border-orange-500 pl-3">${c.name}</h3></div></div>`).join('')}</div></section>`;
-        }
-
-        function renderProcess() {
-            return `<section id="process" class="py-20 bg-white"><div class="max-w-7xl mx-auto px-4 text-center mb-16"><h2 class="text-3xl font-bold text-slate-900">Operational Process Flow</h2></div><div class="max-w-7xl mx-auto px-4 relative"><div class="hidden md:block absolute top-1/2 left-0 w-full h-1 bg-slate-200 -translate-y-1/2 z-0"></div><div class="grid grid-cols-1 md:grid-cols-3 gap-12 relative z-10">${['Incoming & QC', 'Inventory Mgmt', 'Outgoing & Dispatch'].map((t,i) => `<div class="bg-white p-6 rounded-xl border border-slate-100 shadow-lg text-center"><div class="w-16 h-16 ${i===1?'bg-orange-500':'bg-slate-900'} text-white rounded-full flex items-center justify-center text-2xl font-bold mx-auto mb-6 ring-8 ring-white">${i+1}</div><h3 class="text-xl font-bold text-slate-800 mb-3">${t}</h3><p class="text-slate-500 text-sm">Critical procedures ensuring operational excellence.</p></div>`).join('')}</div></div></section>`;
-        }
-
-        function renderTrackingSection() {
-            return `<section id="tracking" class="py-20 bg-slate-50 border-b border-slate-200"><div class="max-w-7xl mx-auto px-4"><div class="bg-white rounded-2xl shadow-xl overflow-hidden flex flex-col md:flex-row"><div class="md:w-5/12 bg-slate-900 p-10 text-white flex flex-col justify-center"><h2 class="text-3xl font-bold mb-4 flex items-center"><i data-lucide="search" class="mr-3 text-orange-500"></i> Track Shipment</h2><p class="text-slate-300">Monitor real-time status via STO Number.</p></div><div class="md:w-7/12 p-10"><form onsubmit="window.handleTrack(event)" class="mb-8"><label class="block text-sm font-bold text-slate-900 mb-2 uppercase">Enter STO Number</label><div class="flex gap-2"><input id="stoInput" type="text" placeholder="e.g. 450012345" class="flex-1 px-4 py-3 border border-slate-300 rounded-sm focus:ring-2 focus:ring-orange-500 outline-none"><button type="submit" class="bg-orange-500 text-white font-bold px-8 py-3 rounded-sm hover:bg-orange-600">Track</button></div></form><div id="trackingResult" class="hidden animate-in"></div></div></div>
-            <!-- ALARM ON HOME -->
-            <div id="pending-gr-wrapper" class="hidden mt-8 bg-slate-900 rounded-2xl p-2 shadow-xl animate-in slide-in-from-top"><div id="pending-gr-container" class="space-y-4"><div class="bg-red-500/10 border border-red-500/50 rounded-xl p-6"><div class="flex items-center mb-4"><div class="bg-red-500 p-2 rounded-lg mr-4 animate-pulse"><i data-lucide="alert-triangle" class="text-white w-6 h-6"></i></div><div><h3 class="text-xl font-bold text-white">Action Required: Overdue Goods Receipt</h3><p class="text-red-300 text-sm">Shipments older than 30 days pending confirmation.</p></div></div><div id="pending-gr-list" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4"></div></div></div></div></div></section>`;
-        }
-
-        function renderContact() {
-            const plants = [{code: "PL01", name: "MSJ"}, {code: "PL03", name: "BE"}, {code: "PL06", name: "KALSEL"}, {code: "PL09", name: "MME"}, {code: "PL14", name: "TJP"}, {code: "PL15", name: "GAM"}, {code: "PL18", name: "ABP"}, {code: "PL19", name: "GSP"}, {code: "PL22", name: "MRW"}];
-            return `<section id="contact" class="py-20 bg-slate-900 text-white"><div class="max-w-7xl mx-auto px-4 grid grid-cols-1 md:grid-cols-2 gap-16"><div><h2 class="text-3xl font-bold mb-6">Contact Control Tower</h2><div class="space-y-6"><div class="flex items-start"><i data-lucide="map-pin" class="w-6 h-6 text-orange-500 mr-4"></i><div><h4 class="font-bold">DC Palaran Main Hub</h4><p class="text-slate-400 text-sm">Jl. Trikora, Palaran, Samarinda</p></div></div><div class="flex items-center"><i data-lucide="phone" class="w-6 h-6 text-orange-500 mr-4"></i><div><h4 class="font-bold">Hotline</h4><p class="text-slate-400 text-sm">+62 811-555-0123</p></div></div></div></div><div class="bg-white rounded-lg p-8 text-slate-900"><h3 class="text-2xl font-bold text-slate-900 mb-6">Quick Stock Check</h3><form onsubmit="window.handleStockCheck(event)" class="space-y-4"><div><label class="block text-sm font-bold mb-2">Project Site</label><select name="site" class="w-full px-4 py-3 bg-slate-100 border-none rounded-sm"><option value="" disabled selected>Select Site...</option>${plants.map(p=>`<option value="${p.name} (${p.code})">${p.name} (${p.code})</option>`).join('')}</select></div><div><label class="block text-sm font-bold mb-2">Search By</label><div class="flex gap-4 mb-2"><label class="flex items-center space-x-2"><input type="radio" name="type" value="Material Number" checked><span>Material Number</span></label><label class="flex items-center space-x-2"><input type="radio" name="type" value="Part Number"><span>Part Number</span></label></div><input name="item" type="text" class="w-full px-4 py-3 bg-slate-100 border-none rounded-sm" placeholder="Enter Number..." required></div><button type="submit" class="w-full bg-green-600 text-white font-bold py-3 rounded-sm hover:bg-green-700 flex items-center justify-center"><i data-lucide="send" class="w-4 h-4 mr-2"></i> Check Stock via WhatsApp</button></form></div></div></section>`;
-        }
-
-        function renderFooter() { return `<footer class="bg-slate-950 text-slate-400 py-8 text-center"><p>&copy; 2025 DC Palaran. All rights reserved.</p></footer>`; }
-
-        function renderAnalysisLanding() {
-            return `<div class="min-h-screen pt-24 pb-12 bg-slate-900 text-white animate-in">
-                <div class="max-w-7xl mx-auto px-4 text-center mb-12"><h2 class="text-4xl font-extrabold mb-4">Analysis Tools</h2><button onclick="window.nav('home')" class="text-orange-500 hover:text-orange-400">Back to Home</button></div>
-                <div class="max-w-7xl mx-auto px-4 grid grid-cols-1 md:grid-cols-3 gap-8">
-                    <div onclick="window.open('https://fff-class.vercel.app/', '_blank')" class="bg-slate-800 rounded-2xl p-8 border border-slate-700 hover:border-orange-500 cursor-pointer group relative overflow-hidden"><div class="absolute top-0 right-0 w-32 h-32 bg-orange-500 opacity-10 rounded-bl-full -mr-8 -mt-8"></div><div class="w-16 h-16 bg-orange-500 rounded-2xl flex items-center justify-center mb-6"><i data-lucide="git-merge" class="text-white w-8 h-8"></i></div><h3 class="text-xl font-bold mb-3">FFF Class Analysis</h3><span class="text-xs font-bold uppercase text-slate-500 group-hover:text-white flex items-center">Launch Tool <i data-lucide="arrow-right" class="ml-2 w-4 h-4"></i></span></div>
-                    <div onclick="window.open('https://analisis-pr-oustanding-dc-palaran.vercel.app/', '_blank')" class="bg-slate-800 rounded-2xl p-8 border border-slate-700 hover:border-blue-500 cursor-pointer group relative overflow-hidden"><div class="absolute top-0 right-0 w-32 h-32 bg-blue-600 opacity-10 rounded-bl-full -mr-8 -mt-8"></div><div class="w-16 h-16 bg-blue-600 rounded-2xl flex items-center justify-center mb-6"><i data-lucide="bar-chart-3" class="text-white w-8 h-8"></i></div><h3 class="text-xl font-bold mb-3">PR OS Analysis</h3><span class="text-xs font-bold uppercase text-slate-500 group-hover:text-white flex items-center">Launch Tool <i data-lucide="arrow-right" class="ml-2 w-4 h-4"></i></span></div>
-                    <div onclick="window.open('https://block-master-dc-palaran.vercel.app/', '_blank')" class="bg-slate-800 rounded-2xl p-8 border border-slate-700 hover:border-slate-500 cursor-pointer group relative overflow-hidden"><div class="absolute top-0 right-0 w-32 h-32 bg-slate-600 opacity-10 rounded-bl-full -mr-8 -mt-8"></div><div class="w-16 h-16 bg-slate-600 rounded-2xl flex items-center justify-center mb-6"><i data-lucide="alert-triangle" class="text-white w-8 h-8"></i></div><h3 class="text-xl font-bold mb-3">Block Master</h3><span class="text-xs font-bold uppercase text-slate-500 group-hover:text-white flex items-center">Launch Tool <i data-lucide="arrow-right" class="ml-2 w-4 h-4"></i></span></div>
-                </div></div>`;
-        }
-
-        // Data Generation
+        // --- Data Logic ---
         const generateReportData = () => {
             const sites = [{ id: 'PL01', name: 'MSJ', share: 35 }, { id: 'PL03', name: 'BE', share: 25 }, { id: 'PL14', name: 'TJP', share: 15 }, { id: 'PL22', name: 'MRW', share: 15 }, { id: 'PL06', name: 'KALSEL', share: 10 }];
             const getVal = (base, share) => Math.round((base * (share/100)) + (Math.random() * 50000000));
@@ -228,15 +163,361 @@
                 for(let w=1; w<=5; w++) {
                     const weekVal = w === 5 ? remaining : Math.round(monthlyTotal / 5.5);
                     remaining -= weekVal;
-                    weeks[w] = { 
-                        total: weekVal, 
-                        components: { nonSoh: Math.round(weekVal*0.2), sto: Math.round(weekVal*0.6), tf: weekVal - Math.round(weekVal*0.2) - Math.round(weekVal*0.6) } 
-                    };
+                    weeks[w] = { total: weekVal, components: { nonSoh: Math.round(weekVal*0.2), sto: Math.round(weekVal*0.6), tf: weekVal - Math.round(weekVal*0.2) - Math.round(weekVal*0.6) } };
                 }
                 return { ...site, ytd: {value: ytdValue, percentage: site.share}, monthly: {value: monthlyTotal, percentage: site.share, weeks} };
             }).sort((a,b) => b.ytd.value - a.ytd.value);
         };
 
+        // --- HTML Generator Helpers ---
+        // NEW: Extracted this function to allow targeted updates without full re-render
+        const generatePendingGRHtml = () => {
+            if (!AppState.pendingGR || AppState.pendingGR.length === 0) return '';
+            
+            const itemsHtml = AppState.pendingGR.map(item => `
+                <div class="bg-red-500/20 p-3 rounded-lg border border-red-500/30 flex justify-between items-center">
+                    <div>
+                        <div class="font-bold text-white text-sm">${item.project}</div>
+                        <div class="text-xs text-red-200">STO: ${item.sto}</div>
+                    </div>
+                    <div class="text-right">
+                        <div class="font-bold text-red-400 text-lg">${item.days} Days</div>
+                        <div class="text-[10px] text-red-300">Since ${item.date}</div>
+                    </div>
+                </div>
+            `).join('');
+            
+            return `
+                <div id="pending-gr-wrapper" class="mt-8 bg-slate-900 rounded-2xl p-2 shadow-xl animate-in slide-in-from-top">
+                    <div class="bg-red-500/10 border border-red-500/50 rounded-xl p-6">
+                        <div class="flex items-center mb-4"><div class="bg-red-500 p-2 rounded-lg mr-4"><i data-lucide="alert-triangle" class="text-white w-6 h-6"></i></div><div><h3 class="text-xl font-bold text-white">Action Required: Overdue Goods Receipt</h3><p class="text-red-300 text-sm">Shipments older than 30 days pending confirmation.</p></div></div>
+                        <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">${itemsHtml}<div class="col-span-full text-center mt-2 font-bold text-white">"Please complete Goods Receipt immediately before requesting new items."</div></div>
+                    </div>
+                </div>`;
+        };
+
+        // --- EXPOSED FUNCTIONS ---
+        
+        window.fetchDashboardData = async () => {
+             // Mock Fallback
+             const mockPendingItems = [
+                 { sto: '4500123456', project: 'PL01 MSJ', days: 45, date: '2023-10-01' },
+                 { sto: '4500987654', project: 'PL14 TJP', days: 32, date: '2023-10-15' },
+                 { sto: '4500555111', project: 'PL22 MRW', days: 60, date: '2023-09-12' }
+             ];
+
+             try {
+                // IMPORTANT: Replace this with your Google Sheet Web Export CSV Link
+                const sheetUrl = 'https://docs.google.com/spreadsheets/d/1ULpZq-bZwvTaEfQ3EcnfTjOm3mOW23rhxGK1OZYBesI/export?format=csv&gid=0';
+                
+                const response = await fetch(sheetUrl);
+                if (!response.ok) throw new Error("Failed to fetch");
+
+                const text = await response.text();
+                const rows = parseCSV(text).slice(1);
+                
+                let pendingItems = [];
+                const today = new Date();
+
+                rows.forEach(row => {
+                    if (!row || row.length < 7) return; 
+                    const sto = row[6];
+                    if(!sto) return;
+
+                    const project = (row[35] && row[35] !== 'undefined') ? row[35] : 'Unknown';
+                    const dateStr = row[0]; 
+
+                    if (dateStr) {
+                        const sentDate = parseDateFlexible(dateStr);
+                        if (sentDate) {
+                            const diff = Math.ceil(Math.abs(today - sentDate) / (1000 * 60 * 60 * 24));
+                            if (diff > 30) {
+                                pendingItems.push({ sto, project, days: diff, date: dateStr });
+                            }
+                        }
+                    }
+                });
+                
+                AppState.pendingGR = pendingItems.length > 0 ? pendingItems.slice(0, 5) : mockPendingItems;
+                
+            } catch(e) { 
+                console.warn("Using Fallback Data:", e.message);
+                AppState.pendingGR = mockPendingItems;
+            }
+
+            // CRITICAL FIX: Only Update Specific DOM Parts based on View
+            // This prevents the whole page from reloading while user is typing in Tracking Input
+            if (AppState.currentView === 'dashboard') {
+                 render(); // Dashboard is read-only, safe to re-render
+            } else if (AppState.currentView === 'home') {
+                 // For Home, only update the Alarm container if it exists
+                 const container = document.getElementById('pending-gr-container');
+                 if (container) {
+                     container.innerHTML = generatePendingGRHtml();
+                     renderIcons();
+                 }
+            }
+        };
+
+        window.nav = (view, sectionId) => {
+            AppState.currentView = view;
+            render();
+            if(sectionId) {
+                setTimeout(() => {
+                    const el = document.getElementById(sectionId);
+                    if(el) el.scrollIntoView({behavior:'smooth'});
+                }, 100);
+            } else {
+                window.scrollTo(0,0);
+            }
+            AppState.mobileMenuOpen = false;
+        };
+
+        window.toggleMenu = () => { AppState.mobileMenuOpen = !AppState.mobileMenuOpen; render(); };
+        window.setReportView = (v) => { AppState.reportView = v; render(); };
+        window.setWeek = (w) => { AppState.selectedWeek = w; render(); };
+        window.runBlock = () => window.open('https://block-master-dc-palaran.vercel.app/', '_blank');
+        window.runPROS = () => window.open('https://analisis-pr-oustanding-dc-palaran.vercel.app/', '_blank');
+        window.runFFF = () => window.open('https://fff-class.vercel.app/', '_blank');
+        
+        window.handleStockCheck = (e) => {
+            e.preventDefault();
+            const form = e.target;
+            const site = form.site.value;
+            const type = form.type.value;
+            const item = form.item.value;
+            if(!site) return alert("Silakan pilih Project Site (PL).");
+            const message = `Halo Admin DC Palaran, saya ingin cek stock:\n\nSite: ${site}\nItem (${type}): ${item}\n\nMohon informasinya. Terima kasih.`;
+            window.open(`https://wa.me/628115550123?text=${encodeURIComponent(message)}`, '_blank');
+        };
+
+        window.handleTrack = async (e) => {
+            e.preventDefault(); 
+            const inputEl = document.getElementById('stoInput');
+            if(!inputEl) return;
+            const input = inputEl.value.trim(); 
+            const container = document.getElementById('trackingResult');
+            
+            if(!input) return;
+            container.innerHTML = '<div class="text-center p-4 text-slate-500"><i data-lucide="loader-2" class="animate-spin inline mr-2"></i> Searching...</div>'; 
+            container.classList.remove('hidden');
+            renderIcons();
+            
+            const mockTrackData = [
+                { sto: '450012345', status: 'DISPATCH', project: 'PL01 MSJ' },
+                { sto: '123', status: 'DELIVERED', project: 'PL03 BE' }
+            ];
+
+            try {
+                // Tracking Fetch
+                const res = await fetch('https://docs.google.com/spreadsheets/d/1ULpZq-bZwvTaEfQ3EcnfTjOm3mOW23rhxGK1OZYBesI/export?format=csv&gid=0');
+                let found = null;
+
+                if(res.ok) {
+                    const rows = parseCSV(await res.text()); 
+                    found = rows.find(r => r[6] === input); 
+                }
+
+                if (!found) {
+                    const mock = mockTrackData.find(m => m.sto === input);
+                    if (mock) {
+                        found = [];
+                        found[33] = mock.status;
+                        found[35] = mock.project;
+                    }
+                }
+                
+                if(found) {
+                    const rawStatus = (found[33] || '').toUpperCase(); 
+                    const project = found[35] || 'Unknown';
+                    let activeIndex = 0;
+                    
+                    if (rawStatus.includes('WAITING') || rawStatus.includes('PACKING')) activeIndex = 1;
+                    else if (rawStatus.includes('TERKIRIM') || rawStatus.includes('DISPATCH') || rawStatus.includes('JALAN')) activeIndex = 2;
+                    else if (rawStatus.includes('DELIVERED') || rawStatus.includes('SAMPAI') || rawStatus.includes('COMPLETE')) activeIndex = 3;
+
+                    const steps = [
+                        { t: 'Order Confirmed (Realized)', s: 'STO verified by DC Palaran', i: 'check-circle' },
+                        { t: 'Picking & Packing', s: 'Items being retrieved from Bin Location & Staging and manifest generation', i: 'package' },
+                        { t: 'Dispatched', s: 'Handed over to transporter', i: 'truck' },
+                        { t: 'Delivered', s: 'Received at Site Warehouse', i: 'map-pin' }
+                    ];
+
+                    let html = `<div class="bg-slate-50 border border-slate-200 rounded-lg p-4 mb-6 flex justify-between items-center"><div><div class="text-xs text-slate-500 uppercase font-bold">Project</div><div class="text-lg font-bold text-slate-900">${project}</div></div><div class="text-right"><div class="text-xs text-slate-500 uppercase font-bold">Status</div><div class="text-sm font-bold text-orange-600">${rawStatus || 'CONFIRMED'}</div></div></div>`;
+                    html += `<div class="space-y-8 relative pl-2 mt-8"><div class="absolute left-6 top-2 bottom-4 w-0.5 bg-slate-200 -z-10"></div>`;
+                    
+                    steps.forEach((step, idx) => {
+                        const isActive = idx <= activeIndex; 
+                        const isCurrent = idx === activeIndex;
+                        let color = 'bg-slate-200 text-slate-400';
+                        if (isActive) {
+                            if (idx === 0) color = 'bg-red-600 text-white shadow-lg shadow-red-200';      
+                            else if (idx === 1) color = 'bg-yellow-500 text-white shadow-lg shadow-yellow-200'; 
+                            else if (idx === 2) color = 'bg-lime-500 text-white shadow-lg shadow-lime-200';      
+                            else if (idx === 3) color = 'bg-green-700 text-white shadow-lg shadow-green-200';    
+                        }
+                        html += `<div class="relative flex items-start group ${isActive ? '' : 'opacity-50'}"><div class="w-8 h-8 rounded-full flex items-center justify-center relative z-10 transition-all ${color} ${isCurrent ? 'scale-110 ring-4 ring-white shadow-lg' : ''}"><i data-lucide="${step.i}" class="w-4 h-4"></i></div><div class="ml-6 pt-1"><h4 class="font-bold text-slate-900">${step.t}</h4><p class="text-xs text-slate-500">${step.s}</p></div></div>`;
+                    });
+                    
+                    html += `</div>`; 
+                    container.innerHTML = html; 
+                    renderIcons();
+                } else { 
+                    container.innerHTML = `<div class="text-red-500 p-4 font-bold text-center">STO Not Found<br><span class="text-xs text-slate-400 font-normal">Try mock data: 450012345 or 123</span></div>`; 
+                }
+            } catch(err) { 
+                console.error(err);
+                container.innerHTML = `<div class="bg-red-50 text-red-500 p-4 rounded border border-red-100 flex flex-col items-center justify-center text-center"><i data-lucide="wifi-off" class="w-8 h-8 mb-2"></i><p class="font-bold">Connection Error</p><p class="text-xs mt-1">Please ensure the Google Sheet is published to the web as CSV.</p></div>`; 
+                renderIcons();
+            }
+        };
+
+        // ZERPD Handlers
+        window.handleZerpdUpload = async (input) => {
+            const file = input.files[0];
+            if(!file) return;
+
+            const today = new Date();
+            const y = today.getFullYear(), m = String(today.getMonth()+1).padStart(2,'0'), d = String(today.getDate()).padStart(2,'0');
+            const fmt1 = `${y}${m}${d}`, fmt2 = `${d}${m}${y}`;
+
+            const fname = file.name.toUpperCase();
+            if ((!fname.includes(fmt1) && !fname.includes(fmt2)) || !fname.includes("ZERPD ALL SITE")) {
+                alert(`Nama file tidak valid! Format: [Tanggal] ZERPD ALL SITE\nContoh: ${fmt2} ZERPD ALL SITE.xlsx`);
+                input.value = ''; return;
+            }
+
+            document.getElementById('zerpdStatus').textContent = "Processing...";
+            try {
+                const buffer = await file.arrayBuffer();
+                const workbook = XLSX.read(new Uint8Array(buffer), { type: 'array' });
+                const jsonData = XLSX.utils.sheet_to_json(workbook.Sheets[workbook.SheetNames[0]], { header: 1 });
+
+                if(jsonData.length < 2) throw new Error("Empty");
+                const headers = jsonData[0].map(h => String(h).toLowerCase().replace(/[^a-z0-9]/g, ''));
+                let mpnIdx = headers.findIndex(h => h.includes('manufact') && (h.includes('part')||h.includes('no')));
+                let matIdx = headers.findIndex(h => h.includes('material') && !h.includes('desc'));
+                
+                if(mpnIdx === -1) mpnIdx = 2; 
+                if(matIdx === -1) matIdx = 0; 
+
+                AppState.zerpdData.clear();
+                let count = 0;
+                for(let i=1; i<jsonData.length; i++) {
+                    const row = jsonData[i];
+                    if (row) {
+                        const mpn = String(row[mpnIdx]||'').trim();
+                        const mat = String(row[matIdx]||'').trim();
+                        if(mpn.length > 1) { AppState.zerpdData.set(normalizeString(mpn), {orig:mpn, mat:mat}); count++; }
+                    }
+                }
+                
+                AppState.isZerpdUploaded = true;
+                render(); 
+                alert(`ZERPD Loaded: ${count} Records`);
+            } catch(e) { console.error(e); alert("Error reading file or Invalid Format"); input.value = ''; }
+        };
+
+        window.deleteZerpdFile = () => {
+            if(!confirm("Hapus file? Form akan terkunci.")) return;
+            AppState.zerpdData.clear();
+            AppState.isZerpdUploaded = false;
+            AppState.isCatalogLocked = true;
+            render();
+        };
+
+        window.checkPartNumber = () => {
+            const input = document.getElementById('inputMPN');
+            const status = document.getElementById('mpnStatus');
+            const normVal = normalizeString(input.value.trim());
+
+            if(!normVal) { status.textContent = "Enter Part Number"; return; }
+
+            if(AppState.zerpdData.has(normVal)) {
+                const data = AppState.zerpdData.get(normVal);
+                status.textContent = "❌ DUPLICATE FOUND"; status.className = "text-sm font-bold ml-2 text-red-600";
+                const exMPN = document.getElementById('existingMPNDisplay');
+                const exMat = document.getElementById('existingMatDisplay');
+                if(exMPN) exMPN.textContent = data.orig;
+                if(exMat) exMat.textContent = data.mat;
+                const warn = document.getElementById('duplicateWarning');
+                if(warn) warn.classList.remove('hidden');
+                
+                AppState.isCatalogLocked = true;
+                window.lockFields();
+            } else {
+                status.textContent = "✅ AVAILABLE"; status.className = "text-sm font-bold ml-2 text-green-600";
+                const warn = document.getElementById('duplicateWarning');
+                if(warn) warn.classList.add('hidden');
+                AppState.isCatalogLocked = false;
+                window.unlockFields();
+            }
+        };
+        
+        window.lockFields = () => {
+            document.querySelectorAll('.master-data-field').forEach(f => {
+                f.disabled = true; 
+                f.classList.add('bg-slate-100','cursor-not-allowed');
+            });
+            const btn = document.getElementById('submitBtn');
+            if(btn) { 
+                btn.disabled = true; 
+                btn.innerHTML = `<i data-lucide="lock" class="w-5 h-5 mr-2"></i> Verify MPN to Unlock`; 
+                btn.className = "w-full bg-slate-300 text-white font-bold py-4 rounded-md shadow-none flex justify-center items-center text-lg cursor-not-allowed"; 
+            }
+            renderIcons();
+        };
+
+        window.unlockFields = () => {
+            document.querySelectorAll('.master-data-field').forEach(f => {
+                f.disabled = false; 
+                f.classList.remove('bg-slate-100','cursor-not-allowed');
+            });
+            const btn = document.getElementById('submitBtn');
+            if(btn) { 
+                btn.disabled = false; 
+                btn.innerHTML = `<i data-lucide="send" class="w-5 h-5 mr-2"></i> Submit Master Data Request`; 
+                btn.className = "w-full bg-orange-500 hover:bg-orange-600 text-white font-bold py-4 rounded-md shadow-lg flex justify-center items-center text-lg"; 
+            }
+            renderIcons();
+        };
+
+        window.handleCatalogSubmit = async (e) => {
+            e.preventDefault();
+            
+            if (isFirebaseAvailable) {
+                if(!auth.currentUser) { 
+                    try { await signInAnonymously(auth); } catch(err) { console.error("Auth Error:", err); } 
+                }
+            } else {
+                console.log("Submitting in offline mode");
+            }
+
+            alert("Request Submitted Successfully!");
+            e.target.reset();
+            window.deleteZerpdFile(); 
+        };
+
+        // --- RENDERERS ---
+        function renderNavbar() {
+            const bg = AppState.navbarScrolled ? 'bg-slate-900 shadow-lg py-3' : 'bg-transparent py-5';
+            return `<nav class="fixed w-full z-50 transition-all duration-300 ${bg}"><div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 flex justify-between items-center"><div class="flex items-center space-x-2 cursor-pointer" onclick="window.nav('home')"><div class="bg-orange-500 p-2 rounded-lg"><i data-lucide="anchor" class="h-6 w-6 text-white"></i></div><div class="flex flex-col"><span class="text-xl font-bold tracking-tighter text-white">DC PALARAN</span><span class="text-xs text-orange-400 font-medium tracking-widest">Mining Logistics Hub</span></div></div><div class="hidden lg:flex items-center space-x-6"><button onclick="window.nav('home')" class="text-slate-200 hover:text-orange-500 font-medium text-sm uppercase">Home</button><button onclick="window.nav('analysis')" class="text-slate-200 hover:text-orange-500 font-medium text-sm uppercase">Analysis Tools</button><button onclick="window.nav('home', 'functions')" class="text-slate-200 hover:text-orange-500 font-medium text-sm uppercase">Functions</button><button onclick="window.nav('home', 'process')" class="text-slate-200 hover:text-orange-500 font-medium text-sm uppercase">Process</button><button onclick="window.nav('home', 'tracking')" class="text-slate-200 hover:text-orange-500 font-medium text-sm uppercase">Tracking</button><button onclick="window.nav('catalog')" class="text-slate-200 hover:text-orange-500 font-medium text-sm uppercase flex items-center"><i data-lucide="file-text" class="w-4 h-4 mr-1"></i> Catalog</button><button onclick="window.nav('dashboard')" class="text-slate-200 hover:text-orange-500 font-medium text-sm uppercase flex items-center"><i data-lucide="layout-dashboard" class="w-4 h-4 mr-1"></i> Dashboard</button><button onclick="window.nav('home', 'contact')" class="bg-orange-500 hover:bg-orange-600 text-white px-5 py-2 rounded-sm font-bold text-sm uppercase">Check Stock</button></div><div class="lg:hidden"><button onclick="window.toggleMenu()" class="text-white"><i data-lucide="menu" class="h-8 w-8"></i></button></div></div>${AppState.mobileMenuOpen ? `<div class="lg:hidden bg-slate-900 border-t border-slate-800 p-4 space-y-2"><button onclick="window.nav('home')" class="block text-slate-300 py-2">Home</button><button onclick="window.nav('dashboard')" class="block text-slate-300 py-2">Dashboard</button></div>` : ''}</nav>`;
+        }
+
+        function renderHero() { return `<div id="home" class="relative h-screen flex items-center justify-center overflow-hidden bg-slate-900"><div class="absolute inset-0 z-0"><img src="https://images.unsplash.com/photo-1586528116311-ad8dd3c8310d?lib=rb-4.0.3&auto=format&fit=crop&w=2070&q=80" class="w-full h-full object-cover opacity-40"><div class="absolute inset-0 bg-gradient-to-r from-slate-900 via-slate-900/80 to-transparent"></div></div><div class="relative z-10 max-w-7xl mx-auto px-4 flex flex-col justify-center h-full"><div class="max-w-3xl"><div class="inline-flex items-center space-x-2 bg-orange-500/10 border border-orange-500/30 rounded-full px-4 py-1 mb-6 backdrop-blur-sm"><span class="flex h-2 w-2 rounded-full bg-orange-500 animate-pulse"></span><span class="text-orange-400 text-sm font-semibold tracking-wide uppercase">Operational Efficiency Optimized</span></div><h1 class="text-5xl md:text-7xl font-extrabold text-white leading-tight mb-6">The Central Nerve of <br/><span class="text-transparent bg-clip-text bg-gradient-to-r from-orange-400 to-orange-600">Mining Logistics</span></h1><p class="text-xl text-slate-300 mb-8 max-w-2xl leading-relaxed">DC Palaran serves as the premier Transit Hub and Buffer Stock Center, ensuring seamless inventory stability.</p><div class="flex flex-col sm:flex-row gap-4"><button onclick="window.nav('analysis')" class="px-8 py-4 bg-orange-500 hover:bg-orange-600 text-slate-900 font-bold rounded-sm shadow-lg flex items-center justify-center">Explore Capabilities <i data-lucide="arrow-right" class="ml-2 h-5 w-5"></i></button><button onclick="window.nav('dashboard')" class="px-8 py-4 border border-slate-500 bg-slate-800/50 backdrop-blur-md text-white font-bold rounded-sm hover:border-orange-500 hover:text-orange-400 flex items-center justify-center"><i data-lucide="activity" class="mr-2 h-5 w-5"></i> Live Dashboard</button></div></div></div></div>`; }
+        function renderObjective() { return `<section class="py-20 bg-white"><div class="max-w-7xl mx-auto px-4 grid grid-cols-1 lg:grid-cols-2 gap-16 items-center"><div><h2 class="text-orange-500 font-bold uppercase tracking-widest text-sm mb-2">Our Core Mission</h2><h3 class="text-4xl font-bold text-slate-900 mb-6">Optimizing Inventory Utilization & Stabilization</h3><p class="text-slate-600 text-lg leading-relaxed mb-6">The primary objective of DC Palaran is to function as the stabilizing force across the entire supply chain.</p><ul class="space-y-4">${['Centralized Buffer Stock Management', 'Reduction of Site-Level Deadstock', 'Rapid Deployment to Satellite Projects'].map(item => `<li class="flex items-center text-slate-700 font-medium"><div class="mr-3 bg-slate-100 p-1 rounded-full text-orange-500"><i data-lucide="shield-check" class="h-5 w-5"></i></div>${item}</li>`).join('')}</ul></div><div class="relative"><div class="absolute -inset-4 bg-orange-100 rounded-xl transform rotate-2"></div><img src="https://images.unsplash.com/photo-1553413077-190dd305871c?ixlib=rb-4.0.3&auto=format&fit=crop&w=1035&q=80" class="relative rounded-lg shadow-2xl w-full object-cover h-96"></div></div></section>`; }
+        function renderKeyFunctions() { return `<section id="functions" class="py-20 bg-slate-50"><div class="max-w-7xl mx-auto px-4 text-center mb-16"><h2 class="text-3xl md:text-4xl font-bold text-slate-900 mb-4">Key Operational Functions</h2><div class="w-24 h-1 bg-orange-500 mx-auto rounded-full"></div></div><div class="max-w-7xl mx-auto px-4 grid grid-cols-1 md:grid-cols-3 gap-8">${[{icon:'truck',t:'Strategic Transit Hub',d:'Primary consolidation point.'},{icon:'database',t:'Buffer Stock Center',d:'Managing volatility.'},{icon:'bar-chart-3',t:'Inventory Stabilization',d:'Control tower for MIN-MAX.'}].map(f=>`<div class="bg-white rounded-xl shadow-lg p-8 border-t-4 border-transparent hover:border-orange-500 transition-all"><div class="mb-6 bg-slate-50 w-20 h-20 rounded-full flex items-center justify-center"><i data-lucide="${f.icon}" class="h-10 w-10 text-orange-500"></i></div><h3 class="text-xl font-bold text-slate-900 mb-3">${f.t}</h3><p class="text-slate-600">${f.d}</p></div>`).join('')}</div></section>`; }
+        function renderCategories() { return `<section id="categories" class="py-20 bg-slate-900 text-white"><div class="max-w-7xl mx-auto px-4 mb-12"><h2 class="text-3xl font-bold mb-2">Material Categories</h2></div><div class="max-w-7xl mx-auto px-4 grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">${[{n:'Spare Parts',i:'settings',img:'1486262715619-67b85e0b08d3'},{n:'Tyres & Rims',i:'layers',img:'1583258509156-f28822026858'},{n:'Components',i:'cpu',img:'1580894732930-0babd100d356'},{n:'General Supplies',i:'box',img:'1595074474855-f9397f8ef5fd'}].map(c=>`<div class="group relative h-96 rounded-lg overflow-hidden cursor-pointer"><img src="https://images.unsplash.com/photo-${c.img}?auto=format&fit=crop&w=600&q=80" class="absolute inset-0 w-full h-full object-cover transition-transform duration-500 group-hover:scale-110"><div class="absolute inset-0 bg-gradient-to-t from-slate-900 via-slate-900/60 to-transparent opacity-90"></div><div class="absolute bottom-0 left-0 p-6 w-full"><div class="bg-orange-500 w-12 h-12 rounded-lg flex items-center justify-center mb-4"><i data-lucide="${c.i}" class="text-white w-6 h-6"></i></div><h3 class="text-xl font-bold mb-2 border-l-4 border-orange-500 pl-3">${c.name}</h3></div></div>`).join('')}</div></section>`; }
+        function renderProcess() { return `<section id="process" class="py-20 bg-white"><div class="max-w-7xl mx-auto px-4 text-center mb-16"><h2 class="text-3xl font-bold text-slate-900">Operational Process Flow</h2></div><div class="max-w-7xl mx-auto px-4 relative"><div class="hidden md:block absolute top-1/2 left-0 w-full h-1 bg-slate-200 -translate-y-1/2 z-0"></div><div class="grid grid-cols-1 md:grid-cols-3 gap-12 relative z-10">${['Incoming & QC', 'Inventory Mgmt', 'Outgoing & Dispatch'].map((t,i) => `<div class="bg-white p-6 rounded-xl border border-slate-100 shadow-lg text-center"><div class="w-16 h-16 ${i===1?'bg-orange-500':'bg-slate-900'} text-white rounded-full flex items-center justify-center text-2xl font-bold mx-auto mb-6 ring-8 ring-white">${i+1}</div><h3 class="text-xl font-bold text-slate-800 mb-3">${t}</h3><p class="text-slate-500 text-sm">Critical procedures ensuring operational excellence.</p></div>`).join('')}</div></div></section>`; }
+        
+        function renderTrackingSection() {
+            // Using placeholder ID to allow targeted updates
+            return `<section id="tracking" class="py-20 bg-slate-50 border-b border-slate-200"><div class="max-w-7xl mx-auto px-4"><div class="bg-white rounded-2xl shadow-xl overflow-hidden flex flex-col md:flex-row"><div class="md:w-5/12 bg-slate-900 p-10 text-white flex flex-col justify-center"><h2 class="text-3xl font-bold mb-4 flex items-center"><i data-lucide="search" class="mr-3 text-orange-500"></i> Track Shipment</h2><p class="text-slate-300">Monitor real-time status via STO Number.</p></div><div class="md:w-7/12 p-10"><form onsubmit="window.handleTrack(event)" class="mb-8"><label class="block text-sm font-bold text-slate-900 mb-2 uppercase">Enter STO Number</label><div class="flex gap-2"><input id="stoInput" type="text" placeholder="e.g. 450012345" class="flex-1 px-4 py-3 border border-slate-300 rounded-sm focus:ring-2 focus:ring-orange-500 outline-none"><button type="submit" class="bg-orange-500 text-white font-bold px-8 py-3 rounded-sm hover:bg-orange-600">Track</button></div></form><div id="trackingResult" class="hidden animate-in"></div></div></div><div id="pending-gr-container">${generatePendingGRHtml()}</div></div></section>`;
+        }
+        function renderContact() { const plants = [{code: "PL01", name: "MSJ"}, {code: "PL03", name: "BE"}, {code: "PL06", name: "KALSEL"}, {code: "PL09", name: "MME"}, {code: "PL14", name: "TJP"}, {code: "PL15", name: "GAM"}, {code: "PL18", name: "ABP"}, {code: "PL19", name: "GSP"}, {code: "PL22", name: "MRW"}]; return `<section id="contact" class="py-20 bg-slate-900 text-white"><div class="max-w-7xl mx-auto px-4 grid grid-cols-1 md:grid-cols-2 gap-16"><div><h2 class="text-3xl font-bold mb-6">Contact Control Tower</h2><div class="space-y-6"><div class="flex items-start"><i data-lucide="map-pin" class="w-6 h-6 text-orange-500 mr-4"></i><div><h4 class="font-bold">DC Palaran Main Hub</h4><p class="text-slate-400 text-sm">Jl. Trikora, Palaran, Samarinda</p></div></div><div class="flex items-center"><i data-lucide="phone" class="w-6 h-6 text-orange-500 mr-4"></i><div><h4 class="font-bold">Hotline</h4><p class="text-slate-400 text-sm">+62 811-555-0123</p></div></div></div></div><div class="bg-white rounded-lg p-8 text-slate-900"><h3 class="text-2xl font-bold text-slate-900 mb-6">Quick Stock Check</h3><form onsubmit="window.handleStockCheck(event)" class="space-y-4"><div><label class="block text-sm font-bold mb-2">Project Site</label><select name="site" class="w-full px-4 py-3 bg-slate-100 border-none rounded-sm"><option value="" disabled selected>Select Site...</option>${plants.map(p=>`<option value="${p.name} (${p.code})">${p.name} (${p.code})</option>`).join('')}</select></div><div><label class="block text-sm font-bold mb-2">Search By</label><div class="flex gap-4 mb-2"><label class="flex items-center space-x-2"><input type="radio" name="type" value="Material Number" checked><span>Material Number</span></label><label class="flex items-center space-x-2"><input type="radio" name="type" value="Part Number"><span>Part Number</span></label></div><input name="item" type="text" class="w-full px-4 py-3 bg-slate-100 border-none rounded-sm" placeholder="Enter Number..." required></div><button type="submit" class="w-full bg-green-600 text-white font-bold py-3 rounded-sm hover:bg-green-700 flex items-center justify-center"><i data-lucide="send" class="w-4 h-4 mr-2"></i> Check Stock via WhatsApp</button></form></div></div></section>`; }
+        function renderFooter() { return `<footer class="bg-slate-950 text-slate-400 py-8 text-center"><p>&copy; 2025 DC Palaran. All rights reserved.</p></footer>`; }
+
+        // --- DASHBOARD WITH REPORTS ---
         function renderDashboard() {
             if (AppState.dashboardData.length === 0) AppState.dashboardData = generateReportData();
             
@@ -276,10 +557,10 @@
                 alertHTML = `
                 <div class="mb-10 bg-slate-900 rounded-2xl p-2 shadow-xl animate-in slide-in-from-top">
                     <div class="bg-red-500/10 border border-red-500/50 rounded-xl p-6">
-                        <div class="flex items-center mb-4"><div class="bg-red-500 p-2 rounded-lg mr-4 animate-pulse"><i data-lucide="alert-triangle" class="text-white w-6 h-6"></i></div><div><h3 class="text-xl font-bold text-white">Action Required: Overdue Goods Receipt</h3><p class="text-red-300 text-sm">Shipments older than 30 days pending confirmation.</p></div></div>
+                        <div class="flex items-center mb-4"><div class="bg-red-500 p-2 rounded-lg mr-4"><i data-lucide="alert-triangle" class="text-white w-6 h-6"></i></div><div><h3 class="text-xl font-bold text-white">Action Required: Overdue Goods Receipt</h3><p class="text-red-300 text-sm">Shipments older than 30 days pending confirmation.</p></div></div>
                         <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
                             ${AppState.pendingGR.map(i => `<div class="bg-red-500/20 p-3 rounded-lg border border-red-500/30 flex justify-between items-center"><div><div class="font-bold text-white text-sm">${i.project}</div><div class="text-xs text-red-200">STO: ${i.sto}</div></div><div class="text-right"><div class="font-bold text-red-400 text-lg">${i.days} Days</div><div class="text-[10px] text-red-300">Since ${i.date}</div></div></div>`).join('')}
-                            <div class="col-span-full text-center mt-2 font-bold text-white animate-pulse">"Please complete Goods Receipt immediately before requesting new items."</div>
+                            <div class="col-span-full text-center mt-2 font-bold text-white">"Please complete Goods Receipt immediately before requesting new items."</div>
                         </div>
                     </div>
                 </div>`;
@@ -303,7 +584,7 @@
                     </div>
                     <div class="grid grid-cols-1 lg:grid-cols-3 gap-8">
                         <div class="lg:col-span-2 bg-white rounded-2xl shadow-xl overflow-hidden border border-slate-200">
-                             <div class="p-6 bg-slate-50 border-b border-slate-200"><h3 class="text-lg font-bold text-slate-800 flex items-center"><i data-lucide="bar-chart-3" class="w-5 h-5 mr-2 text-orange-600"></i> Data Table (${view})</h3></div>
+                             <div class="p-6 bg-slate-50 border-b border-slate-200 flex justify-between items-center"><h3 class="text-lg font-bold text-slate-800 flex items-center"><i data-lucide="bar-chart-3" class="w-5 h-5 mr-2 text-orange-600"></i> Data Table (${view})</h3></div>
                              <div class="overflow-x-auto"><table class="w-full text-left text-sm text-slate-900"><thead class="bg-slate-800 text-slate-200 font-bold uppercase text-xs"><tr><th class="p-4">Site</th>${view==='Weekly'?'<th class="p-4 text-right">Non SOH</th><th class="p-4 text-right">STO</th><th class="p-4 text-right">TF</th>':''}<th class="p-4 text-right">Value</th><th class="p-4 text-center">%</th></tr></thead><tbody class="divide-y divide-slate-100">
                                 ${data.map(row => {
                                     let v = view === 'YTD' ? row.ytd.value : (view === 'Monthly' ? row.monthly.value : row.monthly.weeks[week].total);
@@ -311,7 +592,9 @@
                                     return `<tr class="hover:bg-slate-50"><td class="p-4 font-bold text-slate-700">${row.name}</td>${view==='Weekly'?`<td class="p-4 text-right font-mono text-xs">${formatIDR(row.monthly.weeks[week].components.nonSoh)}</td><td class="p-4 text-right font-mono text-xs">${formatIDR(row.monthly.weeks[week].components.sto)}</td><td class="p-4 text-right font-mono text-xs">${formatIDR(row.monthly.weeks[week].components.tf)}</td>`:''}<td class="p-4 text-right font-mono font-bold">${formatIDR(v)}</td><td class="p-4 text-center text-xs font-bold text-slate-500">${p.toFixed(1)}%</td></tr>`;
                                 }).join('')}
                              </tbody></table></div>
+                             ${view === 'Weekly' ? '<div class="p-4 bg-blue-50 border-t border-blue-100 text-xs text-blue-700 flex items-center justify-center"><i data-lucide="alert-circle" class="w-4 h-4 mr-2"></i> Weekly Breakdown: Non SOH, STO, TF POST</div>' : ''}
                         </div>
+                        
                         <div class="bg-white rounded-2xl shadow-xl overflow-hidden border border-slate-200 h-fit">
                             <div class="p-6 bg-slate-50 border-b border-slate-200"><h3 class="text-lg font-bold text-slate-800 flex items-center"><i data-lucide="pie-chart" class="w-5 h-5 mr-2 text-blue-600"></i> Visual Analysis</h3></div>
                             <div class="p-8 flex flex-col items-center justify-center">${chartHTML}</div>
@@ -321,241 +604,25 @@
             </div>`;
         }
 
+        // --- CATALOG MODULE ---
         function renderCatalog() {
-             // ... Same logic as previous response ...
-             const plantOptions = Array.from({length: 28}, (_, i) => `<option value="PL${String(i + 1).padStart(2, '0')}">PL${String(i + 1).padStart(2, '0')}</option>`).join('');
-             const storageLocOptions = Array.from({length: 15}, (_, i) => `<option value="S${String(i + 1).padStart(3, '0')}">S${String(i + 1).padStart(3, '0')}</option>`).join('');
-             const mtOpts = ["SPRT","FOGC","TIRE","CONS","GENS","ASET","SEJA","MDLE","BOMM","FFF"].map(c=>`<option value="${c}">${c}</option>`).join('');
-             const matGroups = ["S001", "S002", "S003", "S004", "S005", "S006", "F001", "F002", "F003", "F004", "T001", "G001", "G002", "C001", "C002", "C003", "C004", "C005", "C006", "C007", "A001", "A002", "A003", "A004", "A005", "A006", "J001", "J002", "J003", "J004", "J005", "J006", "J007", "J008", "J009", "J010", "J011", "J012", "J013", "J014", "J015", "M001"].map(c=>`<option value="${c}">${c}</option>`).join('');
-             const purchGroups = ["G01", "G02", "G03", "G04", "G05", "G06", "G07"].map(c=>`<option value="${c}">${c}</option>`).join('');
-             const valClasses = ["V001", "V002", "V003", "V004", "V005", "V006", "V007", "V008", "V009", "V010", "V011", "V012", "V013", "V014", "V015", "V016", "V017", "V018", "V019", "V020", "V021", "V022", "V023", "V024", "V025", "V026", "V027", "V028", "V029", "V030", "V031", "V032", "V033", "V034", "V035"].map(c=>`<option value="${c}">${c}</option>`).join('');
-             const lockedClass = AppState.isCatalogLocked ? "bg-slate-100 text-slate-400 cursor-not-allowed border-slate-200 master-data-field" : "";
-             const disabledAttr = AppState.isCatalogLocked ? "disabled" : "";
+            const plantOptions = Array.from({length: 28}, (_, i) => `<option value="PL${String(i + 1).padStart(2, '0')}">PL${String(i + 1).padStart(2, '0')}</option>`).join('');
+            const storageLocOptions = Array.from({length: 15}, (_, i) => `<option value="S${String(i + 1).padStart(3, '0')}">S${String(i + 1).padStart(3, '0')}</option>`).join('');
+            const mtOpts = ["SPRT","FOGC","TIRE","CONS","GENS","ASET","SEJA","MDLE","BOMM","FFF"].map(c=>`<option value="${c}">${c}</option>`).join('');
+            
+            // Full Lists from previous context
+            const matGroups = ["S001", "S002", "S003", "S004", "S005", "S006", "F001", "F002", "F003", "F004", "T001", "G001", "G002", "C001", "C002", "C003", "C004", "C005", "C006", "C007", "A001", "A002", "A003", "A004", "A005", "A006", "J001", "J002", "J003", "J004", "J005", "J006", "J007", "J008", "J009", "J010", "J011", "J012", "J013", "J014", "J015", "M001"].map(c=>`<option value="${c}">${c}</option>`).join('');
+            const purchGroups = ["G01", "G02", "G03", "G04", "G05", "G06", "G07"].map(c=>`<option value="${c}">${c}</option>`).join('');
+            const valClasses = ["V001", "V002", "V003", "V004", "V005", "V006", "V007", "V008", "V009", "V010", "V011", "V012", "V013", "V014", "V015", "V016", "V017", "V018", "V019", "V020", "V021", "V022", "V023", "V024", "V025", "V026", "V027", "V028", "V029", "V030", "V031", "V032", "V033", "V034", "V035"].map(c=>`<option value="${c}">${c}</option>`).join('');
+            const lockedClass = AppState.isCatalogLocked ? "bg-slate-100 text-slate-400 cursor-not-allowed border-slate-200 master-data-field" : "";
+            const disabledAttr = AppState.isCatalogLocked ? "disabled" : "";
 
-             return `<div class="min-h-screen pt-24 pb-12 bg-slate-50 text-slate-900 animate-in"><div class="max-w-6xl mx-auto px-4"><button onclick="window.nav('home')" class="mb-6 flex items-center text-slate-500 hover:text-orange-600 font-medium text-sm"><i data-lucide="arrow-left" class="w-4 h-4 mr-2"></i> Back to Home</button><div class="bg-white rounded-xl shadow-xl overflow-hidden border border-slate-200"><div class="bg-slate-900 p-8 text-white"><h2 class="text-3xl font-bold mb-2 flex items-center"><i data-lucide="file-text" class="mr-3 text-orange-500"></i> New Material Request</h2><p class="text-slate-400">Formulir registrasi Master Data Material baru.</p></div><div class="p-8"><div class="bg-orange-50 border border-orange-200 rounded-lg p-6 mb-8"><div class="flex justify-between items-start"><div><h4 class="font-bold text-orange-800 mb-2 flex items-center"><i data-lucide="shield-check" class="w-5 h-5 mr-2"></i> Duplicate Check (ZERPD)</h4><p class="text-sm text-orange-700 mb-4">Upload file <strong>ZERPD.xlsx</strong> (Format: [Tanggal] ZERPD ALL SITE) untuk membuka formulir.</p></div>${AppState.isZerpdUploaded ? `<button onclick="window.deleteZerpdFile()" class="text-red-500 hover:text-red-700 flex items-center text-sm font-bold"><i data-lucide="trash-2" class="w-4 h-4 mr-1"></i> Remove File</button>` : ''}</div>${!AppState.isZerpdUploaded ? `<input type="file" accept=".xlsx" onchange="window.handleZerpdUpload(this)" class="block w-full text-sm text-slate-500 file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-sm file:font-semibold file:bg-orange-500 file:text-white hover:file:bg-orange-600"/>` : `<div class="text-sm font-bold text-green-600">ZERPD File Loaded. Ready to verify.</div>`}<div id="zerpdStatus" class="text-sm font-bold text-slate-400 mt-2">Waiting for file...</div></div><form onsubmit="window.handleCatalogSubmit(event)" class="space-y-8"><div class="bg-slate-50 p-6 rounded-lg border border-slate-200"><h4 class="font-bold text-slate-800 mb-4 pb-2 border-b border-slate-300 flex items-center"><i data-lucide="user" class="w-4 h-4 mr-2 text-orange-500"></i> Requester Information</h4><div class="grid grid-cols-1 md:grid-cols-2 gap-6"><div><label class="block text-xs font-bold text-slate-500 uppercase mb-1">Requester Name</label><input required name="requester_name" type="text" class="w-full px-3 py-2 border border-slate-300 rounded focus:ring-2 focus:ring-orange-500 outline-none"></div><div><label class="block text-xs font-bold text-slate-500 uppercase mb-1">Department</label><input required name="department" type="text" class="w-full px-3 py-2 border border-slate-300 rounded focus:ring-2 focus:ring-orange-500 outline-none"></div></div></div><div class="bg-blue-50 p-6 rounded-lg border border-blue-200"><h4 class="font-bold text-blue-900 mb-4 pb-2 border-b border-blue-300 flex items-center"><i data-lucide="search" class="w-4 h-4 mr-2"></i> Part Number Verification</h4><div class="grid grid-cols-1 md:grid-cols-2 gap-4"><div class="relative"><label class="block text-xs font-bold text-slate-500 uppercase mb-1">Manufacturing Part Number</label><div class="flex gap-2"><input id="inputMPN" name="manuf_part_number" disabled type="text" class="w-full px-3 py-2 border border-slate-300 rounded focus:ring-2 focus:ring-blue-500 outline-none ${!AppState.isZerpdUploaded?'bg-slate-100 cursor-not-allowed':''}" placeholder="Upload ZERPD first..."><button type="button" onclick="window.checkPartNumber()" ${!AppState.isZerpdUploaded ? 'disabled' : ''} class="bg-blue-600 text-white px-6 py-2 rounded text-xs font-bold hover:bg-blue-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed" id="btnVerifyMPN" disabled>VERIFY</button></div></div><div class="flex items-center"><p id="mpnStatus" class="text-sm font-bold ml-2"></p></div><div class="md:col-span-2 hidden" id="duplicateWarning"><div class="bg-red-100 border-l-4 border-red-500 text-red-700 p-4 rounded shadow-sm"><div class="flex items-start"><i data-lucide="alert-triangle" class="w-5 h-5 mr-2 mt-0.5"></i><div><p class="font-bold">Mohon pastikan kembali PN dikarenakan PN sdh terdaftar di ZERPD</p><p class="text-sm mt-1">Existing Match: <span id="existingMPNDisplay" class="font-mono bg-red-200 px-1 rounded"></span> (Material: <span id="existingMatDisplay" class="font-mono"></span>)</p></div></div></div></div></div></div><div><h4 class="font-bold text-slate-800 mb-4 flex items-center"><i data-lucide="box" class="w-4 h-4 mr-2 text-orange-500"></i> 1. Basic Material Data</h4><div class="grid grid-cols-1 md:grid-cols-3 gap-4"><div class="md:col-span-3"><label class="block text-xs font-bold text-slate-500 uppercase mb-1">Description</label><input required ${disabledAttr} name="description" type="text" class="w-full px-3 py-2 border border-slate-300 rounded outline-none ${lockedClass}" placeholder="Material Description"></div><div><label class="block text-xs font-bold text-slate-500 uppercase mb-1">Old Material</label><input ${disabledAttr} name="old_material" type="text" class="w-full px-3 py-2 border border-slate-300 rounded outline-none ${lockedClass}"></div><div><label class="block text-xs font-bold text-slate-500 uppercase mb-1">Type</label><select ${disabledAttr} name="mat_type" class="w-full px-3 py-2 border border-slate-300 rounded outline-none ${lockedClass}"><option value="">Select...</option>${mtOpts}</select></div><div><label class="block text-xs font-bold text-slate-500 uppercase mb-1">Group</label><select ${disabledAttr} name="mat_group" class="w-full px-3 py-2 border border-slate-300 rounded outline-none ${lockedClass}"><option value="">Select...</option>${matGroups}</select></div><div><label class="block text-xs font-bold text-slate-500 uppercase mb-1">Plant</label><select required ${disabledAttr} name="plant" class="w-full px-3 py-2 border border-slate-300 rounded outline-none ${lockedClass}"><option value="">Select...</option>${plantOptions}</select></div><div><label class="block text-xs font-bold text-slate-500 uppercase mb-1">Base UoM</label><input ${disabledAttr} name="base_uom" class="w-full px-3 py-2 border border-slate-300 rounded outline-none ${lockedClass}"></div></div></div><div><h4 class="font-bold text-slate-800 mb-4 flex items-center"><i data-lucide="settings" class="w-4 h-4 mr-2 text-orange-500"></i> 2. Mfg & Purchasing</h4><div class="grid grid-cols-1 md:grid-cols-3 gap-4"><div><label class="block text-xs font-bold text-slate-500 uppercase mb-1">Part Profile</label><input ${disabledAttr} name="manuf_profile" class="w-full px-3 py-2 border border-slate-300 rounded outline-none ${lockedClass}"></div><div><label class="block text-xs font-bold text-slate-500 uppercase mb-1">Purch Group</label><select ${disabledAttr} name="purch_group" class="w-full px-3 py-2 border border-slate-300 rounded outline-none ${lockedClass}"><option value="">Select...</option>${purchGroups}</select></div><div><label class="block text-xs font-bold text-slate-500 uppercase mb-1">Auto PO</label><select ${disabledAttr} name="auto_po" class="w-full px-3 py-2 border border-slate-300 rounded outline-none ${lockedClass}"><option>Yes</option><option>No</option></select></div></div></div><div><h4 class="font-bold text-slate-800 mb-4 flex items-center"><i data-lucide="bar-chart-2" class="w-4 h-4 mr-2 text-orange-500"></i> 3. MRP</h4><div class="grid grid-cols-1 md:grid-cols-4 gap-4"><div><label class="block text-xs font-bold text-slate-500 uppercase mb-1">MRP Type</label><input ${disabledAttr} value="ND" class="w-full px-3 py-2 border border-slate-300 rounded outline-none ${lockedClass}" readonly></div><div><label class="block text-xs font-bold text-slate-500 uppercase mb-1">Controller</label><input ${disabledAttr} value="M01" class="w-full px-3 py-2 border border-slate-300 rounded outline-none ${lockedClass}" readonly></div><div><label class="block text-xs font-bold text-slate-500 uppercase mb-1">Reorder</label><input ${disabledAttr} value="0" class="w-full px-3 py-2 border border-slate-300 rounded outline-none ${lockedClass}" readonly></div><div><label class="block text-xs font-bold text-slate-500 uppercase mb-1">Lot Size</label><input ${disabledAttr} name="lot" class="w-full px-3 py-2 border border-slate-300 rounded outline-none ${lockedClass}"></div></div></div><div><h4 class="font-bold text-slate-800 mb-4 flex items-center"><i data-lucide="warehouse" class="w-4 h-4 mr-2 text-orange-500"></i> 4. Storage</h4><div class="grid grid-cols-1 md:grid-cols-3 gap-4"><div><label class="block text-xs font-bold text-slate-500 uppercase mb-1">Valuation Class</label><select ${disabledAttr} name="val_class" class="w-full px-3 py-2 border border-slate-300 rounded outline-none ${lockedClass}"><option value="">Select...</option>${valClasses}</select></div><div><label class="block text-xs font-bold text-slate-500 uppercase mb-1">Storage Loc</label><select ${disabledAttr} name="sloc" class="w-full px-3 py-2 border border-slate-300 rounded outline-none ${lockedClass}"><option value="">Select...</option>${storageLocOptions}</select></div><div><label class="block text-xs font-bold text-slate-500 uppercase mb-1">Bin</label><input ${disabledAttr} name="bin" class="w-full px-3 py-2 border border-slate-300 rounded outline-none ${lockedClass}"></div></div></div><div class="pt-6 border-t border-slate-200"><button type="submit" ${disabledAttr} class="w-full bg-orange-500 hover:bg-orange-600 text-white font-bold py-4 rounded-md shadow-lg flex justify-center items-center text-lg disabled:bg-slate-300 disabled:shadow-none disabled:cursor-not-allowed">${AppState.isCatalogLocked ? `<i data-lucide="lock" class="w-5 h-5 mr-2"></i> Verify MPN to Unlock` : `<i data-lucide="send" class="w-5 h-5 mr-2"></i> Submit Request`}</button></div></form></div></div></div></div>`;
+            return `<div class="min-h-screen pt-24 pb-12 bg-slate-50 text-slate-900 animate-in"><div class="max-w-6xl mx-auto px-4"><button onclick="window.nav('home')" class="mb-6 flex items-center text-slate-500 hover:text-orange-600 font-medium text-sm"><i data-lucide="arrow-left" class="w-4 h-4 mr-2"></i> Back to Home</button><div class="bg-white rounded-xl shadow-xl overflow-hidden border border-slate-200"><div class="bg-slate-900 p-8 text-white"><h2 class="text-3xl font-bold mb-2 flex items-center"><i data-lucide="file-text" class="mr-3 text-orange-500"></i> New Material Request</h2><p class="text-slate-400">Formulir registrasi Master Data Material baru.</p></div><div class="p-8"><div class="bg-orange-50 border border-orange-200 rounded-lg p-6 mb-8"><div class="flex justify-between items-start"><div><h4 class="font-bold text-orange-800 mb-2 flex items-center"><i data-lucide="shield-check" class="w-5 h-5 mr-2"></i> Duplicate Check (ZERPD)</h4><p class="text-sm text-orange-700 mb-4">Upload file <strong>ZERPD.xlsx</strong> (Format: [Tanggal] ZERPD ALL SITE) untuk membuka formulir.</p></div>${AppState.isZerpdUploaded ? `<button onclick="window.deleteZerpdFile()" class="text-red-500 hover:text-red-700 flex items-center text-sm font-bold"><i data-lucide="trash-2" class="w-4 h-4 mr-1"></i> Remove File</button>` : ''}</div>${!AppState.isZerpdUploaded ? `<input type="file" accept=".xlsx" onchange="window.handleZerpdUpload(this)" class="block w-full text-sm text-slate-500 file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-sm file:font-semibold file:bg-orange-500 file:text-white hover:file:bg-orange-600"/>` : `<div class="text-sm font-bold text-green-600">ZERPD File Loaded. Ready to verify.</div>`}<div id="zerpdStatus" class="text-sm font-bold text-slate-400 mt-2">Waiting for file...</div></div><form onsubmit="window.handleCatalogSubmit(event)" class="space-y-8"><div class="bg-slate-50 p-6 rounded-lg border border-slate-200"><h4 class="font-bold text-slate-800 mb-4 pb-2 border-b border-slate-300 flex items-center"><i data-lucide="user" class="w-4 h-4 mr-2 text-orange-500"></i> Requester Information</h4><div class="grid grid-cols-1 md:grid-cols-2 gap-6"><div><label class="block text-xs font-bold text-slate-500 uppercase mb-1">Requester Name</label><input required name="requester_name" type="text" class="w-full px-3 py-2 border border-slate-300 rounded focus:ring-2 focus:ring-orange-500 outline-none"></div><div><label class="block text-xs font-bold text-slate-500 uppercase mb-1">Department</label><input required name="department" type="text" class="w-full px-3 py-2 border border-slate-300 rounded focus:ring-2 focus:ring-orange-500 outline-none"></div></div></div><div class="bg-blue-50 p-6 rounded-lg border border-blue-200"><h4 class="font-bold text-blue-900 mb-4 pb-2 border-b border-blue-300 flex items-center"><i data-lucide="search" class="w-4 h-4 mr-2"></i> Part Number Verification</h4><div class="grid grid-cols-1 md:grid-cols-2 gap-4"><div class="relative"><label class="block text-xs font-bold text-slate-500 uppercase mb-1">Manufacturing Part Number</label><div class="flex gap-2"><input id="inputMPN" name="manuf_part_number" disabled type="text" class="w-full px-3 py-2 border border-slate-300 rounded focus:ring-2 focus:ring-blue-500 outline-none ${!AppState.isZerpdUploaded?'bg-slate-100 cursor-not-allowed':''}" placeholder="Upload ZERPD first..."><button type="button" onclick="window.checkPartNumber()" ${!AppState.isZerpdUploaded ? 'disabled' : ''} class="bg-blue-600 text-white px-6 py-2 rounded text-xs font-bold hover:bg-blue-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed" id="btnVerifyMPN" disabled>VERIFY</button></div></div><div class="flex items-center"><p id="mpnStatus" class="text-sm font-bold ml-2"></p></div><div class="md:col-span-2 hidden" id="duplicateWarning"><div class="bg-red-100 border-l-4 border-red-500 text-red-700 p-4 rounded shadow-sm"><div class="flex items-start"><i data-lucide="alert-triangle" class="w-5 h-5 mr-2 mt-0.5"></i><div><p class="font-bold">Mohon pastikan kembali PN dikarenakan PN sdh terdaftar di ZERPD</p><p class="text-sm mt-1">Existing Match: <span id="existingMPNDisplay" class="font-mono bg-red-200 px-1 rounded"></span> (Material: <span id="existingMatDisplay" class="font-mono"></span>)</p></div></div></div></div></div></div><div><h4 class="font-bold text-slate-800 mb-4 flex items-center"><i data-lucide="box" class="w-4 h-4 mr-2 text-orange-500"></i> 1. Basic Material Data</h4><div class="grid grid-cols-1 md:grid-cols-3 gap-4"><div class="md:col-span-3"><label class="block text-xs font-bold text-slate-500 uppercase mb-1">Description</label><input required ${disabledAttr} name="description" type="text" class="w-full px-3 py-2 border border-slate-300 rounded outline-none ${lockedClass}" placeholder="Material Description"></div><div><label class="block text-xs font-bold text-slate-500 uppercase mb-1">Old Material</label><input ${disabledAttr} name="old_material" type="text" class="w-full px-3 py-2 border border-slate-300 rounded outline-none ${lockedClass}"></div><div><label class="block text-xs font-bold text-slate-500 uppercase mb-1">Type</label><select ${disabledAttr} name="mat_type" class="w-full px-3 py-2 border border-slate-300 rounded outline-none ${lockedClass}"><option value="">Select...</option>${mtOpts}</select></div><div><label class="block text-xs font-bold text-slate-500 uppercase mb-1">Group</label><select ${disabledAttr} name="mat_group" class="w-full px-3 py-2 border border-slate-300 rounded outline-none ${lockedClass}"><option value="">Select...</option>${matGroups}</select></div><div><label class="block text-xs font-bold text-slate-500 uppercase mb-1">Plant</label><select required ${disabledAttr} name="plant" class="w-full px-3 py-2 border border-slate-300 rounded outline-none ${lockedClass}"><option value="">Select...</option>${plantOptions}</select></div><div><label class="block text-xs font-bold text-slate-500 uppercase mb-1">Base UoM</label><input ${disabledAttr} name="base_uom" class="w-full px-3 py-2 border border-slate-300 rounded outline-none ${lockedClass}"></div></div></div><div><h4 class="font-bold text-slate-800 mb-4 flex items-center"><i data-lucide="settings" class="w-4 h-4 mr-2 text-orange-500"></i> 2. Mfg & Purchasing</h4><div class="grid grid-cols-1 md:grid-cols-3 gap-4"><div><label class="block text-xs font-bold text-slate-500 uppercase mb-1">Part Profile</label><input ${disabledAttr} name="manuf_profile" class="w-full px-3 py-2 border border-slate-300 rounded outline-none ${lockedClass}"></div><div><label class="block text-xs font-bold text-slate-500 uppercase mb-1">Purch Group</label><select ${disabledAttr} name="purch_group" class="w-full px-3 py-2 border border-slate-300 rounded outline-none ${lockedClass}"><option value="">Select...</option>${purchGroups}</select></div><div><label class="block text-xs font-bold text-slate-500 uppercase mb-1">Auto PO</label><select ${disabledAttr} name="auto_po" class="w-full px-3 py-2 border border-slate-300 rounded outline-none ${lockedClass}"><option>Yes</option><option>No</option></select></div></div></div><div><h4 class="font-bold text-slate-800 mb-4 flex items-center"><i data-lucide="bar-chart-2" class="w-4 h-4 mr-2 text-orange-500"></i> 3. MRP</h4><div class="grid grid-cols-1 md:grid-cols-4 gap-4"><div><label class="block text-xs font-bold text-slate-500 uppercase mb-1">MRP Type</label><input ${disabledAttr} value="ND" class="w-full px-3 py-2 border border-slate-300 rounded outline-none ${lockedClass}" readonly></div><div><label class="block text-xs font-bold text-slate-500 uppercase mb-1">Controller</label><input ${disabledAttr} value="M01" class="w-full px-3 py-2 border border-slate-300 rounded outline-none ${lockedClass}" readonly></div><div><label class="block text-xs font-bold text-slate-500 uppercase mb-1">Reorder</label><input ${disabledAttr} value="0" class="w-full px-3 py-2 border border-slate-300 rounded outline-none ${lockedClass}" readonly></div><div><label class="block text-xs font-bold text-slate-500 uppercase mb-1">Lot Size</label><input ${disabledAttr} name="lot" class="w-full px-3 py-2 border border-slate-300 rounded outline-none ${lockedClass}"></div></div></div><div><h4 class="font-bold text-slate-800 mb-4 flex items-center"><i data-lucide="warehouse" class="w-4 h-4 mr-2 text-orange-500"></i> 4. Storage</h4><div class="grid grid-cols-1 md:grid-cols-3 gap-4"><div><label class="block text-xs font-bold text-slate-500 uppercase mb-1">Valuation Class</label><select ${disabledAttr} name="val_class" class="w-full px-3 py-2 border border-slate-300 rounded outline-none ${lockedClass}"><option value="">Select...</option>${valClasses}</select></div><div><label class="block text-xs font-bold text-slate-500 uppercase mb-1">Storage Loc</label><select ${disabledAttr} name="sloc" class="w-full px-3 py-2 border border-slate-300 rounded outline-none ${lockedClass}"><option value="">Select...</option>${storageLocOptions}</select></div><div><label class="block text-xs font-bold text-slate-500 uppercase mb-1">Bin</label><input ${disabledAttr} name="bin" class="w-full px-3 py-2 border border-slate-300 rounded outline-none ${lockedClass}"></div></div></div><div class="pt-6 border-t border-slate-200"><button type="submit" ${disabledAttr} class="w-full bg-orange-500 hover:bg-orange-600 text-white font-bold py-4 rounded-md shadow-lg flex justify-center items-center text-lg disabled:bg-slate-300 disabled:shadow-none disabled:cursor-not-allowed">${AppState.isCatalogLocked ? `<i data-lucide="lock" class="w-5 h-5 mr-2"></i> Verify MPN to Unlock` : `<i data-lucide="send" class="w-5 h-5 mr-2"></i> Submit Request`}</button></div></form></div></div></div></div>`;
         }
 
-        // --- EXPOSE TO WINDOW ---
-        window.nav = (view, sectionId) => {
-            AppState.currentView = view;
-            render();
-            if(sectionId) {
-                setTimeout(() => {
-                    const el = document.getElementById(sectionId);
-                    if(el) el.scrollIntoView({behavior:'smooth'});
-                }, 100);
-            } else {
-                window.scrollTo(0,0);
-            }
-            AppState.mobileMenuOpen = false;
-        };
-
-        window.toggleMenu = () => { AppState.mobileMenuOpen = !AppState.mobileMenuOpen; render(); };
-        window.setReportView = (v) => { AppState.reportView = v; render(); };
-        window.setWeek = (w) => { AppState.selectedWeek = w; render(); };
-        window.runBlock = () => window.open('https://block-master-dc-palaran.vercel.app/', '_blank');
-        window.runPROS = () => window.open('https://analisis-pr-oustanding-dc-palaran.vercel.app/', '_blank');
-        window.runFFF = () => window.open('https://fff-class.vercel.app/', '_blank');
-        
-        window.handleStockCheck = (e) => {
-            e.preventDefault();
-            const form = e.target;
-            const site = form.site.value;
-            const type = form.type.value;
-            const item = form.item.value;
-            if(!site) return alert("Silakan pilih Project Site (PL).");
-            const message = `Halo Admin DC Palaran, saya ingin cek stock:\n\nSite: ${site}\nItem (${type}): ${item}\n\nMohon informasinya. Terima kasih.`;
-            window.open(`https://wa.me/628115550123?text=${encodeURIComponent(message)}`, '_blank');
-        };
-
-        // --- Track & Alarm ---
-        window.fetchDashboardData = async () => {
-             try {
-                const response = await fetch('https://docs.google.com/spreadsheets/d/1ULpZq-bZwvTaEfQ3EcnfTjOm3mOW23rhxGK1OZYBesI/export?format=csv&gid=0');
-                const text = await response.text();
-                const rows = parseCSV(text).slice(1);
-                
-                let totalVol = 0; 
-                let pendingItems = [];
-                const today = new Date();
-
-                rows.forEach(row => {
-                    if(!row[6]) return; // Col G
-                    const sto = row[6];
-                    const project = row[35] || 'Unknown';
-                    const dateStr = row[0]; // Col A Date
-
-                    if (dateStr) {
-                        let sentDate = new Date(dateStr);
-                        if (isNaN(sentDate.getTime())) {
-                             const dateParts = dateStr.split(/[-/]/); 
-                             if (dateParts.length === 3) sentDate = new Date(`${dateParts[2]}-${dateParts[1]}-${dateParts[0]}`);
-                        }
-
-                        if (!isNaN(sentDate.getTime())) {
-                            const diff = Math.ceil(Math.abs(today - sentDate) / (1000 * 60 * 60 * 24));
-                            if (diff > 30) {
-                                pendingItems.push({ sto, project, days: diff, date: dateStr });
-                            }
-                        }
-                    }
-                });
-                AppState.pendingGR = pendingItems.slice(0, 5);
-                render(); 
-            } catch(e) { console.error("Dashboard Error:", e); }
-        };
-
-        window.handleTrack = async (e) => {
-            e.preventDefault(); 
-            const input = document.getElementById('stoInput').value.trim(); 
-            const container = document.getElementById('trackingResult');
-            if(!input) return;
-            container.innerHTML = '<div class="text-center p-4 text-slate-500"><i data-lucide="loader-2" class="animate-spin inline mr-2"></i> Searching...</div>'; 
-            container.classList.remove('hidden');
-            renderIcons();
-            
-            try {
-                const res = await fetch('https://docs.google.com/spreadsheets/d/1ULpZq-bZwvTaEfQ3EcnfTjOm3mOW23rhxGK1OZYBesI/export?format=csv&gid=0');
-                const rows = parseCSV(await res.text()); 
-                const found = rows.find(r => r[6] === input); 
-                
-                if(found) {
-                    const rawStatus = (found[33] || '').toUpperCase(); 
-                    const project = found[35] || 'Unknown';
-                    let activeIndex = 0;
-                    
-                    if (rawStatus.includes('WAITING') || rawStatus.includes('PACKING')) activeIndex = 1;
-                    else if (rawStatus.includes('TERKIRIM') || rawStatus.includes('DISPATCH')) activeIndex = 2;
-                    else if (rawStatus.includes('DELIVERED') || rawStatus.includes('SAMPAI')) activeIndex = 3;
-
-                    const steps = [
-                        { t: 'Order Confirmed (Realized)', s: 'STO verified by DC Palaran', i: 'check-circle' },
-                        { t: 'Picking & Packing', s: 'Items being retrieved from Bin Location & Staging and manifest generation', i: 'package' },
-                        { t: 'Dispatched', s: 'Handed over to transporter', i: 'truck' },
-                        { t: 'Delivered', s: 'Received at Site Warehouse', i: 'map-pin' }
-                    ];
-
-                    let html = `<div class="bg-slate-50 border border-slate-200 rounded-lg p-4 mb-6 flex justify-between items-center"><div><div class="text-xs text-slate-500 uppercase font-bold">Project</div><div class="text-lg font-bold text-slate-900">${project}</div></div><div class="text-right"><div class="text-xs text-slate-500 uppercase font-bold">Status</div><div class="text-sm font-bold text-orange-600">${rawStatus || 'CONFIRMED'}</div></div></div>`;
-                    html += `<div class="space-y-8 relative pl-2 mt-8"><div class="absolute left-6 top-2 bottom-4 w-0.5 bg-slate-200 -z-10"></div>`;
-                    
-                    steps.forEach((step, idx) => {
-                        const isActive = idx <= activeIndex; 
-                        const isCurrent = idx === activeIndex;
-                        let color = 'bg-slate-200 text-slate-400';
-                        if (isActive) {
-                            if (idx === 0) color = 'bg-red-600 text-white shadow-lg shadow-red-200';      
-                            else if (idx === 1) color = 'bg-yellow-500 text-white shadow-lg shadow-yellow-200'; 
-                            else if (idx === 2) color = 'bg-lime-500 text-white shadow-lg shadow-lime-200';     
-                            else if (idx === 3) color = 'bg-green-700 text-white shadow-lg shadow-green-200';   
-                        }
-                        html += `<div class="relative flex items-start group ${isActive ? '' : 'opacity-50'}"><div class="w-8 h-8 rounded-full flex items-center justify-center relative z-10 transition-all ${color} ${isCurrent ? 'scale-110 ring-4 ring-white shadow-lg' : ''}"><i data-lucide="${step.i}" class="w-4 h-4"></i></div><div class="ml-6 pt-1"><h4 class="font-bold text-slate-900">${step.t}</h4><p class="text-xs text-slate-500">${step.s}</p></div></div>`;
-                    });
-                    
-                    html += `</div>`; 
-                    container.innerHTML = html; 
-                    renderIcons();
-                } else { container.innerHTML = `<div class="text-red-500 p-4 font-bold text-center">STO Not Found</div>`; }
-            } catch(err) { container.innerHTML = `<div class="text-red-500 p-4">Connection Error</div>`; }
-        };
-
-        // ZERPD Handlers
-        window.handleZerpdUpload = async (input) => {
-            const file = input.files[0];
-            if(!file) return;
-
-            const today = new Date();
-            const y = today.getFullYear(), m = String(today.getMonth()+1).padStart(2,'0'), d = String(today.getDate()).padStart(2,'0');
-            const fmt1 = `${y}${m}${d}`, fmt2 = `${d}${m}${y}`;
-
-            if ((!file.name.includes(fmt1) && !file.name.includes(fmt2)) || !file.name.toUpperCase().includes("ZERPD ALL SITE")) {
-                alert(`Nama file tidak valid! Format: [Tanggal] ZERPD ALL SITE\nContoh: ${fmt2} ZERPD ALL SITE.xlsx`);
-                input.value = ''; return;
-            }
-
-            document.getElementById('zerpdStatus').textContent = "Processing...";
-            try {
-                const buffer = await file.arrayBuffer();
-                const workbook = XLSX.read(new Uint8Array(buffer), { type: 'array' });
-                const jsonData = XLSX.utils.sheet_to_json(workbook.Sheets[workbook.SheetNames[0]], { header: 1 });
-
-                if(jsonData.length < 2) throw new Error("Empty");
-                const headers = jsonData[0].map(h => String(h).toLowerCase().replace(/[^a-z0-9]/g, ''));
-                let mpnIdx = headers.findIndex(h => h.includes('manufact') && (h.includes('part')||h.includes('no')));
-                let matIdx = headers.findIndex(h => h.includes('material') && !h.includes('desc'));
-                if(mpnIdx === -1) mpnIdx = 2; if(matIdx === -1) matIdx = 0; 
-
-                AppState.zerpdData.clear();
-                let count = 0;
-                for(let i=1; i<jsonData.length; i++) {
-                    const row = jsonData[i];
-                    const mpn = String(row[mpnIdx]||'').trim();
-                    const mat = String(row[matIdx]||'').trim();
-                    if(mpn.length > 1) { AppState.zerpdData.set(normalizeString(mpn), {orig:mpn, mat:mat}); count++; }
-                }
-                
-                AppState.isZerpdUploaded = true;
-                render(); // Re-render to update UI state
-                alert(`ZERPD Loaded: ${count} Records`);
-            } catch(e) { console.error(e); alert("Error reading file"); input.value = ''; }
-        };
-
-        window.deleteZerpdFile = () => {
-            if(!confirm("Hapus file? Form akan terkunci.")) return;
-            AppState.zerpdData.clear();
-            AppState.isZerpdUploaded = false;
-            AppState.isCatalogLocked = true;
-            render();
-        };
-
-        window.checkPartNumber = () => {
-            const input = document.getElementById('inputMPN');
-            const status = document.getElementById('mpnStatus');
-            const normVal = normalizeString(input.value.trim());
-
-            if(!normVal) { status.textContent = "Enter Part Number"; return; }
-
-            if(AppState.zerpdData.has(normVal)) {
-                const data = AppState.zerpdData.get(normVal);
-                status.textContent = "❌ DUPLICATE FOUND"; status.className = "text-sm font-bold ml-2 text-red-600";
-                document.getElementById('existingMPNDisplay').textContent = data.orig;
-                document.getElementById('existingMatDisplay').textContent = data.mat;
-                document.getElementById('duplicateWarning').classList.remove('hidden');
-                AppState.isCatalogLocked = true;
-                window.lockFields();
-            } else {
-                status.textContent = "✅ AVAILABLE"; status.className = "text-sm font-bold ml-2 text-green-600";
-                document.getElementById('duplicateWarning').classList.add('hidden');
-                AppState.isCatalogLocked = false;
-                window.unlockFields();
-            }
-        };
-        
-        window.lockFields = () => {
-            document.querySelectorAll('.master-data-field').forEach(f => {
-                f.disabled = true; f.classList.add('bg-slate-100','cursor-not-allowed');
-            });
-            const btn = document.getElementById('submitBtn');
-            if(btn) { btn.disabled = true; btn.innerHTML = `<i data-lucide="lock" class="w-5 h-5 mr-2"></i> Verify MPN to Unlock`; btn.className = "w-full bg-slate-300 text-white font-bold py-4 rounded-md shadow-none flex justify-center items-center text-lg cursor-not-allowed"; }
-            renderIcons();
-        };
-
-        window.unlockFields = () => {
-            document.querySelectorAll('.master-data-field').forEach(f => {
-                f.disabled = false; f.classList.remove('bg-slate-100','cursor-not-allowed');
-            });
-            const btn = document.getElementById('submitBtn');
-            if(btn) { btn.disabled = false; btn.innerHTML = `<i data-lucide="send" class="w-5 h-5 mr-2"></i> Submit Master Data Request`; btn.className = "w-full bg-orange-500 hover:bg-orange-600 text-white font-bold py-4 rounded-md shadow-lg flex justify-center items-center text-lg"; }
-            renderIcons();
-        };
-
-        window.handleCatalogSubmit = async (e) => {
-            e.preventDefault();
-            if(!auth.currentUser) { try { await signInAnonymously(auth); } catch(err) { return alert("Auth failed"); } }
-            // Real implementation would collect form data here
-            alert("Request Submitted Successfully!");
-            e.target.reset();
-            window.deleteZerpdFile(); // Reset flow
-        };
+        function renderAnalysisLanding() {
+            return `<div class="min-h-screen pt-24 pb-12 bg-slate-900 text-white animate-in"><div class="max-w-7xl mx-auto px-4 text-center mb-12"><h2 class="text-4xl font-extrabold mb-4">Analysis Tools</h2><button onclick="window.nav('home')" class="text-orange-500 hover:text-orange-400">Back to Home</button></div><div class="max-w-7xl mx-auto px-4 grid grid-cols-1 md:grid-cols-3 gap-8"><div onclick="window.open('https://fff-class.vercel.app/', '_blank')" class="bg-slate-800 rounded-2xl p-8 border border-slate-700 hover:border-orange-500 cursor-pointer group relative overflow-hidden"><div class="absolute top-0 right-0 w-32 h-32 bg-orange-500 opacity-10 rounded-bl-full -mr-8 -mt-8"></div><div class="w-16 h-16 bg-orange-500 rounded-2xl flex items-center justify-center mb-6"><i data-lucide="git-merge" class="text-white w-8 h-8"></i></div><h3 class="text-xl font-bold mb-3">FFF Class Analysis</h3><span class="text-xs font-bold uppercase text-slate-500 group-hover:text-white flex items-center">Launch Tool <i data-lucide="arrow-right" class="ml-2 w-4 h-4"></i></span></div><div onclick="window.open('https://analisis-pr-oustanding-dc-palaran.vercel.app/', '_blank')" class="bg-slate-800 rounded-2xl p-8 border border-slate-700 hover:border-blue-500 cursor-pointer group relative overflow-hidden"><div class="absolute top-0 right-0 w-32 h-32 bg-blue-600 opacity-10 rounded-bl-full -mr-8 -mt-8"></div><div class="w-16 h-16 bg-blue-600 rounded-2xl flex items-center justify-center mb-6"><i data-lucide="bar-chart-3" class="text-white w-8 h-8"></i></div><h3 class="text-xl font-bold mb-3">PR OS Analysis</h3><span class="text-xs font-bold uppercase text-slate-500 group-hover:text-white flex items-center">Launch Tool <i data-lucide="arrow-right" class="ml-2 w-4 h-4"></i></span></div><div onclick="window.open('https://block-master-dc-palaran.vercel.app/', '_blank')" class="bg-slate-800 rounded-2xl p-8 border border-slate-700 hover:border-slate-500 cursor-pointer group relative overflow-hidden"><div class="absolute top-0 right-0 w-32 h-32 bg-slate-600 opacity-10 rounded-bl-full -mr-8 -mt-8"></div><div class="w-16 h-16 bg-slate-600 rounded-2xl flex items-center justify-center mb-6"><i data-lucide="alert-triangle" class="text-white w-8 h-8"></i></div><h3 class="text-xl font-bold mb-3">Block Master</h3><span class="text-xs font-bold uppercase text-slate-500 group-hover:text-white flex items-center">Launch Tool <i data-lucide="arrow-right" class="ml-2 w-4 h-4"></i></span></div></div></div>`;
+        }
 
         // --- RENDER MAIN ---
         function render() {
@@ -584,25 +651,38 @@
 
             // Re-init state check for catalog
             if (AppState.currentView === 'catalog' && AppState.isZerpdUploaded) {
-               document.getElementById('inputMPN').disabled = false;
-               document.getElementById('inputMPN').classList.remove('bg-slate-100', 'cursor-not-allowed');
-               document.getElementById('btnVerifyMPN').disabled = false;
-               document.getElementById('btnVerifyMPN').classList.remove('opacity-50', 'cursor-not-allowed');
+               const inputMPN = document.getElementById('inputMPN');
+               if (inputMPN) {
+                   inputMPN.disabled = false;
+                   inputMPN.classList.remove('bg-slate-100', 'cursor-not-allowed');
+               }
+               
+               const btnVerify = document.getElementById('btnVerifyMPN');
+               if (btnVerify) {
+                   btnVerify.disabled = false;
+                   btnVerify.classList.remove('opacity-50', 'cursor-not-allowed');
+               }
+
                const delBtn = document.getElementById('deleteZerpdBtn');
                if(delBtn) delBtn.classList.remove('hidden');
+               
                const stat = document.getElementById('zerpdStatus');
                if(stat) {
                    stat.textContent = "ZERPD File Loaded. Ready.";
                    stat.className = "text-sm font-bold text-green-600";
                }
+               
                const upContainer = document.getElementById('zerpdUploadContainer');
                if(upContainer) upContainer.classList.add('hidden');
             }
         }
 
         // --- Initialization ---
-        if(auth) onAuthStateChanged(auth, (u) => currentUser = u);
-        signInAnonymously(auth).catch(console.error);
+        if(isFirebaseAvailable && auth) {
+            onAuthStateChanged(auth, (u) => currentUser = u);
+            signInAnonymously(auth).catch(err => console.warn("Auto-login skipped:", err));
+        }
+        
         render();
 
     </script>
