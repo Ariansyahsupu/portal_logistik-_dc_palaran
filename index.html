@@ -123,7 +123,7 @@
         };
 
         // --- Chart Utils ---
-        const generateDonutChartSVG = (data) => {
+        const generateDonutChartSVG = (data, centerText = "Total", centerValue = "") => {
             const total = data.reduce((acc, curr) => acc + curr.value, 0);
             let cumulativePercent = 0;
             const size = 160;
@@ -148,11 +148,10 @@
                 return `<path d="${d}" fill="${slice.color}" />`;
             }).join('');
 
-            return `<div class="relative flex justify-center items-center"><svg viewBox="-1 -1 2 2" width="${size}" height="${size}" style="transform: rotate(-90deg)">${paths}<circle cx="0" cy="0" r="0.6" fill="white" /></svg><div class="absolute inset-0 flex flex-col items-center justify-center text-slate-800"><span class="text-xs font-bold uppercase">Total</span><span class="text-xs font-extrabold">${formatIDR(total).replace('Rp', '')}</span></div></div>`;
+            return `<div class="relative flex justify-center items-center"><svg viewBox="-1 -1 2 2" width="${size}" height="${size}" style="transform: rotate(-90deg)">${paths}<circle cx="0" cy="0" r="0.6" fill="white" /></svg><div class="absolute inset-0 flex flex-col items-center justify-center text-slate-800"><span class="text-[10px] font-bold uppercase text-slate-400">${centerText}</span><span class="text-xs font-extrabold">${centerValue || formatIDR(total).replace('Rp', '')}</span></div></div>`;
         };
 
         // --- Data Logic ---
-        // Generates placeholder data initially, will be overwritten by fetch
         const generateReportData = () => {
             return []; // Return empty, let fetch handle it
         };
@@ -186,7 +185,7 @@
         // --- EXPOSED FUNCTIONS ---
         
         window.fetchDashboardData = async () => {
-             // 1. Fetch Alarm Data (Existing)
+             // 1. Fetch Alarm Data
              const mockPendingItems = [
                  { sto: '4500123456', project: 'PL01 MSJ', days: 45, date: '2023-10-01' },
                  { sto: '4500987654', project: 'PL14 TJP', days: 32, date: '2023-10-15' },
@@ -225,7 +224,7 @@
                 AppState.pendingGR = mockPendingItems;
             }
 
-            // 2. Fetch Utilization Data (NEW - "Dasboard" Feature with Aggregation)
+            // 2. Fetch Utilization Data with Aggregation
             const utilSheetUrl = 'https://docs.google.com/spreadsheets/d/e/2PACX-1vSgvF0NUSq_o9gV90IzgKGAeNiNu3I5KH0D8vde-hHHngl8Pw2HYvPGSdurUe_O0c9LM6aoApnG31TH/pub?gid=1387121170&single=true&output=csv';
             
             try {
@@ -234,37 +233,26 @@
                     const textUtil = await resUtil.text();
                     const rowsUtil = parseCSV(textUtil).slice(1); // Skip header
                     
-                    // AGGREGATION LOGIC STARTS HERE
                     const siteMap = new Map();
 
                     rowsUtil.forEach(row => {
-                        // Data Mapping: Site = Column I (Index 8), Value = Column K (Index 10)
                         if(!row[8] || !row[10]) return;
 
                         const siteName = row[8].trim();
-                        // Normalize site name slightly to prevent "PLRN" and "PLRN " being different
                         const siteKey = normalizeString(siteName); 
-
-                        // Clean value: remove Rp, dots, spaces, convert comma to dot
                         let cleanVal = row[10].replace(/[Rp\s.]/g, '').replace(',', '.');
                         const rowValue = parseFloat(cleanVal) || 0;
 
                         if (siteMap.has(siteKey)) {
-                            // Resume/Accumulate value if site exists
                             const existing = siteMap.get(siteKey);
                             existing.totalValue += rowValue;
                         } else {
-                            // Create new entry
                             siteMap.set(siteKey, { name: siteName, totalValue: rowValue });
                         }
                     });
 
-                    // Convert Aggregated Map back to Array for Dashboard
                     const newDashboardData = Array.from(siteMap.values()).map(item => {
                         const ytdValue = item.totalValue;
-                        
-                        // Derived data estimation (Proportional)
-                        // Assuming the YTD is total for year, we estimate monthly as avg
                         const monthlyTotal = Math.round(ytdValue / 12); 
                         const weeks = {};
                         let remaining = monthlyTotal;
@@ -289,21 +277,18 @@
                         };
                     });
 
-                    // Recalculate percentages based on GRAND TOTAL
                     const totalYTD = newDashboardData.reduce((a,b) => a + b.ytd.value, 0);
                     newDashboardData.forEach(d => {
                         d.ytd.percentage = totalYTD > 0 ? (d.ytd.value / totalYTD * 100) : 0;
                         d.monthly.percentage = d.ytd.percentage;
                     });
 
-                    // Sort by value high to low
                     AppState.dashboardData = newDashboardData.sort((a,b) => b.ytd.value - a.ytd.value);
                 }
             } catch(e) {
                 console.error("Utilization Data Fetch Error:", e);
             }
 
-            // Render updates
             if (AppState.currentView === 'dashboard') {
                  render(); 
             } else if (AppState.currentView === 'home') {
@@ -365,7 +350,6 @@
             ];
 
             try {
-                // Tracking Fetch
                 const res = await fetch('https://docs.google.com/spreadsheets/d/1ULpZq-bZwvTaEfQ3EcnfTjOm3mOW23rhxGK1OZYBesI/export?format=csv&gid=0');
                 let found = null;
 
@@ -586,14 +570,14 @@
             else if (view === 'Monthly') totalVal = data.reduce((a, b) => a + b.monthly.value, 0);
             else totalVal = data.reduce((a, b) => a + b.monthly.weeks[week].total, 0);
 
-            // Chart
-            let chartHTML = '';
+            // Chart Logic - Bar Chart
+            let barChartHTML = '';
             if (view === 'Weekly') {
                 const tNonSoh = data.reduce((a, b) => a + b.monthly.weeks[week].components.nonSoh, 0);
                 const tSto = data.reduce((a, b) => a + b.monthly.weeks[week].components.sto, 0);
                 const tTf = data.reduce((a, b) => a + b.monthly.weeks[week].components.tf, 0);
                 const cData = [{v:tSto, c:'#f97316', l:'STO'}, {v:tNonSoh, c:'#3b82f6', l:'Non SOH'}, {v:tTf, c:'#94a3b8', l:'TF Post'}];
-                chartHTML = `
+                barChartHTML = `
                     <div class="text-center">
                         ${generateDonutChartSVG(cData.map(d=>({value:d.v, color:d.c})))}
                         <div class="mt-6 grid grid-cols-3 gap-2 text-center">
@@ -602,11 +586,35 @@
                     </div>`;
             } else {
                 const max = Math.max(...data.map(d => view === 'YTD' ? d.ytd.value : d.monthly.value)) * 1.1;
-                chartHTML = `<div class="space-y-3">${data.map(i => {
+                barChartHTML = `<div class="space-y-3">${data.map(i => {
                     const v = view === 'YTD' ? i.ytd.value : i.monthly.value;
                     return `<div><div class="flex justify-between text-xs font-bold mb-1 text-slate-600"><span>${i.name}</span><span>${formatIDR(v)}</span></div><div class="w-full bg-slate-200 rounded-full h-3 overflow-hidden"><div class="h-full rounded-full bg-gradient-to-r from-orange-400 to-orange-600" style="width:${(v/max)*100}%"></div></div></div>`;
                 }).join('')}</div>`;
             }
+
+            // New Pie Chart Logic
+            // Calculate slice colors
+            const palette = ['#f97316', '#3b82f6', '#10b981', '#a855f7', '#ec4899', '#64748b'];
+            const pieData = data.map((item, idx) => ({
+                value: item.ytd.value,
+                color: palette[idx % palette.length],
+                label: item.name
+            })).sort((a,b) => b.value - a.value);
+
+            const pieChartHTML = `
+                <div class="text-center relative">
+                    ${generateDonutChartSVG(pieData, "Total", formatIDR(totalVal).replace('Rp', ''))}
+                    <div class="mt-4 grid grid-cols-2 gap-2 text-left">
+                        ${pieData.map(d => `
+                            <div class="flex items-center text-xs text-slate-600">
+                                <span class="w-2 h-2 rounded-full mr-2" style="background:${d.color}"></span>
+                                <span class="flex-1 truncate font-medium">${d.label}</span>
+                                <span class="font-bold">${((d.value / totalVal) * 100).toFixed(1)}%</span>
+                            </div>
+                        `).join('')}
+                    </div>
+                </div>
+            `;
 
             let alertHTML = '';
             if(AppState.pendingGR.length > 0) {
@@ -622,14 +630,38 @@
                 </div>`;
             }
 
+            // Calculate total for Card
+            const totalYTDValue = data.reduce((acc, curr) => acc + curr.ytd.value, 0);
+
             return `
             <div class="min-h-screen pt-24 pb-12 bg-slate-950 text-white animate-in">
                 <div class="max-w-7xl mx-auto px-4">
-                    <div class="flex justify-between items-end mb-10">
-                        <div><button onclick="window.nav('home')" class="mb-6 flex items-center text-slate-400 hover:text-orange-400 text-sm font-medium uppercase"><i data-lucide="arrow-left" class="w-4 h-4 mr-2"></i> Back to Home</button><h2 class="text-4xl font-extrabold mb-2 text-white">Report Management</h2><p class="text-slate-400">Deadstock & Part Closing Utilization Analysis</p></div>
-                        <div class="text-right hidden md:block"><p class="text-xs text-slate-500 uppercase font-bold mb-1">Total Utilization (YTD)</p><p class="text-2xl font-mono font-bold text-orange-500">${formatIDR(data.reduce((a,b)=>a+b.ytd.value,0))}</p></div>
+                    <div class="mb-8">
+                        <button onclick="window.nav('home')" class="mb-6 flex items-center text-slate-400 hover:text-orange-400 text-sm font-medium uppercase"><i data-lucide="arrow-left" class="w-4 h-4 mr-2"></i> Back to Home</button>
+                        
+                        <!-- NEW TOTAL CARD -->
+                        <div class="bg-gradient-to-r from-slate-900 to-slate-800 border border-slate-700 rounded-2xl p-8 shadow-2xl relative overflow-hidden group">
+                            <div class="absolute top-0 right-0 w-64 h-64 bg-orange-500 opacity-10 rounded-full -mr-16 -mt-16 blur-3xl group-hover:opacity-20 transition-opacity duration-500"></div>
+                            <div class="relative z-10">
+                                <div class="flex items-center justify-between">
+                                    <div>
+                                        <p class="text-sm text-orange-400 font-bold uppercase tracking-wider mb-1 flex items-center"><i data-lucide="trending-up" class="w-4 h-4 mr-2"></i> Total Inventory Utilization (YTD)</p>
+                                        <h2 class="text-4xl md:text-6xl font-extrabold text-white tracking-tight">${formatIDR(totalYTDValue)}</h2>
+                                    </div>
+                                    <div class="hidden md:block bg-slate-800 p-4 rounded-xl border border-slate-700 shadow-lg">
+                                        <i data-lucide="wallet" class="w-12 h-12 text-orange-500"></i>
+                                    </div>
+                                </div>
+                                <div class="mt-4 flex items-center space-x-4 text-sm text-slate-400">
+                                    <span class="bg-green-500/20 text-green-400 px-2 py-1 rounded flex items-center"><i data-lucide="arrow-up-right" class="w-3 h-3 mr-1"></i> Live Data</span>
+                                    <span>Updated from Control Tower</span>
+                                </div>
+                            </div>
+                        </div>
                     </div>
+
                     ${alertHTML}
+
                     <div class="bg-slate-900/80 border border-slate-800 rounded-2xl p-2 mb-8 flex flex-col md:flex-row justify-between items-center gap-4">
                         <div class="flex space-x-2">
                             <button onclick="window.setReportView('YTD')" class="px-6 py-2 rounded-lg text-sm font-bold transition-all ${view==='YTD'?'bg-orange-500 text-white shadow-lg':'text-slate-400 hover:bg-slate-800'}">YTD</button>
@@ -638,7 +670,9 @@
                         </div>
                         ${view==='Weekly'?`<div class="flex items-center space-x-2 pr-4"><span class="text-xs text-slate-400 font-bold uppercase">Week:</span>${[1,2,3,4,5].map(w=>`<button onclick="window.setWeek(${w})" class="w-8 h-8 rounded-full text-xs font-bold transition-all ${week===w?'bg-blue-600 text-white':'bg-slate-800 text-slate-400'}">${w}</button>`).join('')}</div>`:''}
                     </div>
+
                     <div class="grid grid-cols-1 lg:grid-cols-3 gap-8">
+                        <!-- Data Table (Left) -->
                         <div class="lg:col-span-2 bg-white rounded-2xl shadow-xl overflow-hidden border border-slate-200">
                              <div class="p-6 bg-slate-50 border-b border-slate-200 flex justify-between items-center"><h3 class="text-lg font-bold text-slate-800 flex items-center"><i data-lucide="bar-chart-3" class="w-5 h-5 mr-2 text-orange-600"></i> Data Table (${view})</h3></div>
                              <div class="overflow-x-auto"><table class="w-full text-left text-sm text-slate-900"><thead class="bg-slate-800 text-slate-200 font-bold uppercase text-xs"><tr><th class="p-4">Site</th>${view==='Weekly'?'<th class="p-4 text-right">Non SOH</th><th class="p-4 text-right">STO</th><th class="p-4 text-right">TF</th>':''}<th class="p-4 text-right">Value</th><th class="p-4 text-center">%</th></tr></thead><tbody class="divide-y divide-slate-100">
@@ -651,9 +685,19 @@
                              ${view === 'Weekly' ? '<div class="p-4 bg-blue-50 border-t border-blue-100 text-xs text-blue-700 flex items-center justify-center"><i data-lucide="alert-circle" class="w-4 h-4 mr-2"></i> Weekly Breakdown: Non SOH, STO, TF POST</div>' : ''}
                         </div>
                         
-                        <div class="bg-white rounded-2xl shadow-xl overflow-hidden border border-slate-200 h-fit">
-                            <div class="p-6 bg-slate-50 border-b border-slate-200"><h3 class="text-lg font-bold text-slate-800 flex items-center"><i data-lucide="pie-chart" class="w-5 h-5 mr-2 text-blue-600"></i> Visual Analysis</h3></div>
-                            <div class="p-8 flex flex-col items-center justify-center">${chartHTML}</div>
+                        <!-- Visual Analysis (Right Column Stack) -->
+                        <div class="space-y-8">
+                            <!-- NEW PIE CHART CARD -->
+                            <div class="bg-white rounded-2xl shadow-xl overflow-hidden border border-slate-200 h-fit">
+                                <div class="p-6 bg-slate-50 border-b border-slate-200"><h3 class="text-lg font-bold text-slate-800 flex items-center"><i data-lucide="pie-chart" class="w-5 h-5 mr-2 text-blue-600"></i> Site Distribution (%)</h3></div>
+                                <div class="p-8 flex flex-col items-center justify-center">${pieChartHTML}</div>
+                            </div>
+
+                            <!-- EXISTING BAR CHART CARD -->
+                            <div class="bg-white rounded-2xl shadow-xl overflow-hidden border border-slate-200 h-fit">
+                                <div class="p-6 bg-slate-50 border-b border-slate-200"><h3 class="text-lg font-bold text-slate-800 flex items-center"><i data-lucide="bar-chart-2" class="w-5 h-5 mr-2 text-orange-600"></i> Comparative Analysis</h3></div>
+                                <div class="p-8 flex flex-col items-center justify-center">${barChartHTML}</div>
+                            </div>
                         </div>
                     </div>
                 </div>
