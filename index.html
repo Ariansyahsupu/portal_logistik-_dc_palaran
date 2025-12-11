@@ -152,25 +152,12 @@
         };
 
         // --- Data Logic ---
+        // Generates placeholder data initially, will be overwritten by fetch
         const generateReportData = () => {
-            const sites = [{ id: 'PL01', name: 'MSJ', share: 35 }, { id: 'PL03', name: 'BE', share: 25 }, { id: 'PL14', name: 'TJP', share: 15 }, { id: 'PL22', name: 'MRW', share: 15 }, { id: 'PL06', name: 'KALSEL', share: 10 }];
-            const getVal = (base, share) => Math.round((base * (share/100)) + (Math.random() * 50000000));
-            return sites.map(site => {
-                const ytdValue = getVal(15000000000, site.share);
-                const monthlyTotal = getVal(2000000000, site.share);
-                const weeks = {};
-                let remaining = monthlyTotal;
-                for(let w=1; w<=5; w++) {
-                    const weekVal = w === 5 ? remaining : Math.round(monthlyTotal / 5.5);
-                    remaining -= weekVal;
-                    weeks[w] = { total: weekVal, components: { nonSoh: Math.round(weekVal*0.2), sto: Math.round(weekVal*0.6), tf: weekVal - Math.round(weekVal*0.2) - Math.round(weekVal*0.6) } };
-                }
-                return { ...site, ytd: {value: ytdValue, percentage: site.share}, monthly: {value: monthlyTotal, percentage: site.share, weeks} };
-            }).sort((a,b) => b.ytd.value - a.ytd.value);
+            return []; // Return empty, let fetch handle it
         };
 
         // --- HTML Generator Helpers ---
-        // NEW: Extracted this function to allow targeted updates without full re-render
         const generatePendingGRHtml = () => {
             if (!AppState.pendingGR || AppState.pendingGR.length === 0) return '';
             
@@ -199,7 +186,7 @@
         // --- EXPOSED FUNCTIONS ---
         
         window.fetchDashboardData = async () => {
-             // Mock Fallback
+             // 1. Fetch Alarm Data (Existing)
              const mockPendingItems = [
                  { sto: '4500123456', project: 'PL01 MSJ', days: 45, date: '2023-10-01' },
                  { sto: '4500987654', project: 'PL14 TJP', days: 32, date: '2023-10-15' },
@@ -207,50 +194,119 @@
              ];
 
              try {
-                // IMPORTANT: Replace this with your Google Sheet Web Export CSV Link
-                const sheetUrl = 'https://docs.google.com/spreadsheets/d/1ULpZq-bZwvTaEfQ3EcnfTjOm3mOW23rhxGK1OZYBesI/export?format=csv&gid=0';
-                
-                const response = await fetch(sheetUrl);
-                if (!response.ok) throw new Error("Failed to fetch");
+                const alarmSheetUrl = 'https://docs.google.com/spreadsheets/d/1ULpZq-bZwvTaEfQ3EcnfTjOm3mOW23rhxGK1OZYBesI/export?format=csv&gid=0';
+                const response = await fetch(alarmSheetUrl);
+                if (response.ok) {
+                    const text = await response.text();
+                    const rows = parseCSV(text).slice(1);
+                    let pendingItems = [];
+                    const today = new Date();
 
-                const text = await response.text();
-                const rows = parseCSV(text).slice(1);
-                
-                let pendingItems = [];
-                const today = new Date();
-
-                rows.forEach(row => {
-                    if (!row || row.length < 7) return; 
-                    const sto = row[6];
-                    if(!sto) return;
-
-                    const project = (row[35] && row[35] !== 'undefined') ? row[35] : 'Unknown';
-                    const dateStr = row[0]; 
-
-                    if (dateStr) {
-                        const sentDate = parseDateFlexible(dateStr);
-                        if (sentDate) {
-                            const diff = Math.ceil(Math.abs(today - sentDate) / (1000 * 60 * 60 * 24));
-                            if (diff > 30) {
-                                pendingItems.push({ sto, project, days: diff, date: dateStr });
+                    rows.forEach(row => {
+                        if (!row || row.length < 7) return; 
+                        const sto = row[6];
+                        if(!sto) return;
+                        const project = (row[35] && row[35] !== 'undefined') ? row[35] : 'Unknown';
+                        const dateStr = row[0]; 
+                        if (dateStr) {
+                            const sentDate = parseDateFlexible(dateStr);
+                            if (sentDate) {
+                                const diff = Math.ceil(Math.abs(today - sentDate) / (1000 * 60 * 60 * 24));
+                                if (diff > 30) {
+                                    pendingItems.push({ sto, project, days: diff, date: dateStr });
+                                }
                             }
                         }
-                    }
-                });
-                
-                AppState.pendingGR = pendingItems.length > 0 ? pendingItems.slice(0, 5) : mockPendingItems;
-                
+                    });
+                    AppState.pendingGR = pendingItems.length > 0 ? pendingItems.slice(0, 5) : mockPendingItems;
+                }
             } catch(e) { 
-                console.warn("Using Fallback Data:", e.message);
+                console.warn("Alarm Fetch Failed:", e.message);
                 AppState.pendingGR = mockPendingItems;
             }
 
-            // CRITICAL FIX: Only Update Specific DOM Parts based on View
-            // This prevents the whole page from reloading while user is typing in Tracking Input
+            // 2. Fetch Utilization Data (NEW - "Dasboard" Feature with Aggregation)
+            const utilSheetUrl = 'https://docs.google.com/spreadsheets/d/e/2PACX-1vSgvF0NUSq_o9gV90IzgKGAeNiNu3I5KH0D8vde-hHHngl8Pw2HYvPGSdurUe_O0c9LM6aoApnG31TH/pub?gid=1387121170&single=true&output=csv';
+            
+            try {
+                const resUtil = await fetch(utilSheetUrl);
+                if(resUtil.ok) {
+                    const textUtil = await resUtil.text();
+                    const rowsUtil = parseCSV(textUtil).slice(1); // Skip header
+                    
+                    // AGGREGATION LOGIC STARTS HERE
+                    const siteMap = new Map();
+
+                    rowsUtil.forEach(row => {
+                        // Data Mapping: Site = Column I (Index 8), Value = Column K (Index 10)
+                        if(!row[8] || !row[10]) return;
+
+                        const siteName = row[8].trim();
+                        // Normalize site name slightly to prevent "PLRN" and "PLRN " being different
+                        const siteKey = normalizeString(siteName); 
+
+                        // Clean value: remove Rp, dots, spaces, convert comma to dot
+                        let cleanVal = row[10].replace(/[Rp\s.]/g, '').replace(',', '.');
+                        const rowValue = parseFloat(cleanVal) || 0;
+
+                        if (siteMap.has(siteKey)) {
+                            // Resume/Accumulate value if site exists
+                            const existing = siteMap.get(siteKey);
+                            existing.totalValue += rowValue;
+                        } else {
+                            // Create new entry
+                            siteMap.set(siteKey, { name: siteName, totalValue: rowValue });
+                        }
+                    });
+
+                    // Convert Aggregated Map back to Array for Dashboard
+                    const newDashboardData = Array.from(siteMap.values()).map(item => {
+                        const ytdValue = item.totalValue;
+                        
+                        // Derived data estimation (Proportional)
+                        // Assuming the YTD is total for year, we estimate monthly as avg
+                        const monthlyTotal = Math.round(ytdValue / 12); 
+                        const weeks = {};
+                        let remaining = monthlyTotal;
+                        for(let w=1; w<=5; w++) {
+                            const weekVal = w === 5 ? remaining : Math.round(monthlyTotal / 5.5);
+                            remaining -= weekVal;
+                            weeks[w] = { 
+                                total: weekVal, 
+                                components: { 
+                                    nonSoh: Math.round(weekVal*0.2), 
+                                    sto: Math.round(weekVal*0.6), 
+                                    tf: weekVal - Math.round(weekVal*0.2) - Math.round(weekVal*0.6) 
+                                } 
+                            };
+                        }
+
+                        return { 
+                            id: normalizeString(item.name), 
+                            name: item.name, 
+                            ytd: { value: ytdValue, percentage: 0 }, 
+                            monthly: { value: monthlyTotal, percentage: 0, weeks: weeks } 
+                        };
+                    });
+
+                    // Recalculate percentages based on GRAND TOTAL
+                    const totalYTD = newDashboardData.reduce((a,b) => a + b.ytd.value, 0);
+                    newDashboardData.forEach(d => {
+                        d.ytd.percentage = totalYTD > 0 ? (d.ytd.value / totalYTD * 100) : 0;
+                        d.monthly.percentage = d.ytd.percentage;
+                    });
+
+                    // Sort by value high to low
+                    AppState.dashboardData = newDashboardData.sort((a,b) => b.ytd.value - a.ytd.value);
+                }
+            } catch(e) {
+                console.error("Utilization Data Fetch Error:", e);
+            }
+
+            // Render updates
             if (AppState.currentView === 'dashboard') {
-                 render(); // Dashboard is read-only, safe to re-render
+                 render(); 
             } else if (AppState.currentView === 'home') {
-                 // For Home, only update the Alarm container if it exists
                  const container = document.getElementById('pending-gr-container');
                  if (container) {
                      container.innerHTML = generatePendingGRHtml();
