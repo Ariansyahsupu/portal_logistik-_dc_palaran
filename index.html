@@ -152,6 +152,12 @@
             return "Unknown";
         };
 
+        const calculateWeekFromDate = (date) => {
+            if(!date) return 1;
+            const day = date.getDate();
+            return Math.ceil(day / 7);
+        };
+
         const generateDonutChartSVG = (data, centerText = "Total", centerValue = "") => {
             const total = data.reduce((acc, curr) => acc + curr.value, 0);
             let cumulativePercent = 0;
@@ -182,11 +188,12 @@
 
         const generateReportData = () => [];
 
-        // --- 4. DATA LOGIC & ACTIONS (DEFINED LOCALLY FIRST) ---
+        // --- 4. DATA LOGIC & ACTIONS ---
         
         const fetchDashboardDataAction = async () => {
              const mockPendingItems = [{ sto: '4500123456', project: 'PL01 MSJ', days: 45, date: '2023-10-01' }];
 
+             // 1. Alarm Data
              try {
                 const alarmSheetUrl = 'https://docs.google.com/spreadsheets/d/1ULpZq-bZwvTaEfQ3EcnfTjOm3mOW23rhxGK1OZYBesI/export?format=csv&gid=0';
                 const response = await fetch(alarmSheetUrl);
@@ -213,6 +220,7 @@
                 }
             } catch(e) { console.warn("Alarm Fetch Failed:", e.message); AppState.pendingGR = mockPendingItems; }
 
+            // 2. Utilization Data (Aggregation)
             const utilSheetUrl = 'https://docs.google.com/spreadsheets/d/e/2PACX-1vSgvF0NUSq_o9gV90IzgKGAeNiNu3I5KH0D8vde-hHHngl8Pw2HYvPGSdurUe_O0c9LM6aoApnG31TH/pub?gid=1387121170&single=true&output=csv';
             try {
                 const resUtil = await fetch(utilSheetUrl);
@@ -223,6 +231,8 @@
                     const siteMap = new Map();
                     const monthMap = new Map(); 
                     const weekMap = new Map();
+                    
+                    const monthsOrder = ["Januari", "Februari", "Maret", "April", "Mei", "Juni", "Juli", "Agustus", "September", "Oktober", "November", "Desember"];
 
                     rowsUtil.forEach(row => {
                         if(!row[8] || !row[10]) return;
@@ -230,6 +240,7 @@
                         const siteKey = normalizeString(siteName); 
                         let cleanVal = row[10].replace(/[Rp\s.]/g, '').replace(',', '.');
                         const rowValue = parseFloat(cleanVal) || 0;
+                        const dateRaw = row[1]; // Col B
 
                         // 1. Site Aggregation (YTD)
                         if (siteMap.has(siteKey)) {
@@ -238,8 +249,13 @@
                             siteMap.set(siteKey, { name: siteName, totalValue: rowValue });
                         }
 
-                        // 2. Month Aggregation
-                        const monthName = getMonthName(row[1]);
+                        // 2. Month Resolution
+                        let monthName = getMonthName(dateRaw);
+                        let dateObj = parseDateFlexible(dateRaw);
+
+                        if (!monthName) monthName = "Mei-Agustus";
+
+                        // 3. Month Aggregation
                         if (!monthMap.has(monthName)) {
                             monthMap.set(monthName, { total: 0, sites: new Map() });
                         }
@@ -248,21 +264,38 @@
                         if (monthData.sites.has(siteKey)) monthData.sites.get(siteKey).value += rowValue;
                         else monthData.sites.set(siteKey, { name: siteName, value: rowValue });
 
-                        // 3. Week Aggregation
+                        // 4. Week Aggregation (Prioritize Col M [12])
+                        let weekNum = 0;
                         let weekRaw = row[12] ? row[12].toString().trim() : "";
+                        
+                        // Extract number from Column M (e.g., "Week 1" -> 1)
+                        const weekMatch = weekRaw.match(/(\d+)/);
+
+                        if (weekMatch) {
+                            weekNum = parseInt(weekMatch[0]);
+                        } else if (dateObj) {
+                            // Smart Fallback: If Col M is empty, calculate from Date
+                            weekNum = calculateWeekFromDate(dateObj);
+                        }
+
                         let weekKey = "";
                         let weekLabel = "";
-                        
-                        if (weekRaw === "" || weekRaw === "0") {
+                        let sortOrder = 0;
+
+                        if (monthName === "Mei-Agustus" || weekNum === 0) {
                              weekKey = "legacy";
                              weekLabel = "Week 1-5 (Mei-Agustus)";
+                             sortOrder = 0; 
                         } else {
-                             weekKey = `W${weekRaw}-${monthName}`;
-                             weekLabel = `Week ${weekRaw} ${monthName}`;
+                             weekKey = `W${weekNum}-${monthName}`;
+                             weekLabel = `Week ${weekNum} ${monthName}`;
+                             // Sort index: Month Index * 10 + Week Index (e.g. Sept Week 1 = 81)
+                             const mIdx = monthsOrder.indexOf(monthName);
+                             sortOrder = (mIdx !== -1 ? mIdx + 1 : 99) * 10 + weekNum;
                         }
 
                         if (!weekMap.has(weekKey)) {
-                            weekMap.set(weekKey, { id: weekKey, label: weekLabel, total: 0, sites: new Map(), orderMonth: monthName, orderWeek: weekRaw || 0 });
+                            weekMap.set(weekKey, { id: weekKey, label: weekLabel, total: 0, sites: new Map(), sortOrder: sortOrder });
                         }
                         const weekData = weekMap.get(weekKey);
                         weekData.total += rowValue;
@@ -289,22 +322,25 @@
                     // Flatten Monthly Data
                     const newMonthlyData = Array.from(monthMap.entries()).map(([month, data]) => {
                         const sitesArray = Array.from(data.sites.values()).sort((a,b) => b.value - a.value);
-                        return { name: month, value: data.total, percentage: 0, sites: sitesArray };
+                        // Sort Value for Months: Real months first (by index), then legacy
+                        const mIdx = monthsOrder.indexOf(month);
+                        const sortIdx = mIdx !== -1 ? mIdx : -1;
+                        return { name: month, value: data.total, percentage: 0, sites: sitesArray, sortIdx: sortIdx };
                     });
                     const totalMonthly = newMonthlyData.reduce((a,b) => a + b.value, 0);
                     newMonthlyData.forEach(d => { d.percentage = totalMonthly > 0 ? (d.value / totalMonthly * 100) : 0; });
-                    AppState.monthlyBreakdown = newMonthlyData.sort((a,b) => b.value - a.value);
+                    AppState.monthlyBreakdown = newMonthlyData.sort((a,b) => b.sortIdx - a.sortIdx);
 
                     // Flatten Weekly Data
                     const newWeeklyData = Array.from(weekMap.values()).map(data => {
                         const sitesArray = Array.from(data.sites.values()).sort((a,b) => b.value - a.value);
-                        return { id: data.id, name: data.label, value: data.total, percentage: 0, sites: sitesArray };
+                        return { id: data.id, name: data.label, value: data.total, percentage: 0, sites: sitesArray, sortOrder: data.sortOrder };
                     });
                     const totalWeekly = newWeeklyData.reduce((a,b) => a + b.value, 0);
                     newWeeklyData.forEach(d => { d.percentage = totalWeekly > 0 ? (d.value / totalWeekly * 100) : 0; });
-                    AppState.weeklyBreakdown = newWeeklyData.sort((a,b) => b.value - a.value);
+                    AppState.weeklyBreakdown = newWeeklyData.sort((a,b) => b.sortOrder - a.sortOrder);
                     
-                    render(); // Call standard render function here
+                    render(); // Re-render to update UI with fresh data
                 }
             } catch(e) { console.error("Utilization Fetch Error:", e); }
         };
@@ -356,25 +392,17 @@
         };
 
         const toggleMenuAction = () => { AppState.mobileMenuOpen = !AppState.mobileMenuOpen; render(); };
-        
         const runBlockAction = () => window.open('https://block-master-dc-palaran.vercel.app/', '_blank');
         const runPROSAction = () => window.open('https://analisis-pr-oustanding-dc-palaran.vercel.app/', '_blank');
         const runFFFAction = () => window.open('https://fff-class.vercel.app/', '_blank');
-        
         const handleStockCheckAction = (e) => { e.preventDefault(); const form = e.target; const site = form.site.value; const type = form.type.value; const item = form.item.value; if(!site) return alert("Silakan pilih Project Site (PL)."); const message = `Halo Admin DC Palaran, saya ingin cek stock:\n\nSite: ${site}\nItem (${type}): ${item}\n\nMohon informasinya. Terima kasih.`; window.open(`https://wa.me/628115550123?text=${encodeURIComponent(message)}`, '_blank'); };
         
         const handleTrackAction = async (e) => { e.preventDefault(); const inputEl = document.getElementById('stoInput'); if(!inputEl) return; const input = inputEl.value.trim(); const container = document.getElementById('trackingResult'); if(!input) return; container.innerHTML = '<div class="text-center p-4 text-slate-500"><i data-lucide="loader-2" class="animate-spin inline mr-2"></i> Searching...</div>'; container.classList.remove('hidden'); renderIcons(); const mockTrackData = [{ sto: '450012345', status: 'DISPATCH', project: 'PL01 MSJ' }, { sto: '123', status: 'DELIVERED', project: 'PL03 BE' }]; try { const res = await fetch('https://docs.google.com/spreadsheets/d/1ULpZq-bZwvTaEfQ3EcnfTjOm3mOW23rhxGK1OZYBesI/export?format=csv&gid=0'); let found = null; if(res.ok) { const rows = parseCSV(await res.text()); found = rows.find(r => r[6] === input); } if (!found) { const mock = mockTrackData.find(m => m.sto === input); if (mock) { found = []; found[33] = mock.status; found[35] = mock.project; } } if(found) { const rawStatus = (found[33] || '').toUpperCase(); const project = found[35] || 'Unknown'; let activeIndex = 0; if (rawStatus.includes('WAITING') || rawStatus.includes('PACKING')) activeIndex = 1; else if (rawStatus.includes('TERKIRIM') || rawStatus.includes('DISPATCH') || rawStatus.includes('JALAN')) activeIndex = 2; else if (rawStatus.includes('DELIVERED') || rawStatus.includes('SAMPAI') || rawStatus.includes('COMPLETE')) activeIndex = 3; const steps = [{ t: 'Order Confirmed', s: 'STO verified', i: 'check-circle' }, { t: 'Picking & Packing', s: 'In Warehouse', i: 'package' }, { t: 'Dispatched', s: 'Handed over', i: 'truck' }, { t: 'Delivered', s: 'Received at Site', i: 'map-pin' }]; let html = `<div class="bg-slate-50 border border-slate-200 rounded-lg p-4 mb-6 flex justify-between items-center"><div><div class="text-xs text-slate-500 uppercase font-bold">Project</div><div class="text-lg font-bold text-slate-900">${project}</div></div><div class="text-right"><div class="text-xs text-slate-500 uppercase font-bold">Status</div><div class="text-sm font-bold text-orange-600">${rawStatus || 'CONFIRMED'}</div></div></div>`; html += `<div class="space-y-8 relative pl-2 mt-8"><div class="absolute left-6 top-2 bottom-4 w-0.5 bg-slate-200 -z-10"></div>`; steps.forEach((step, idx) => { const isActive = idx <= activeIndex; const isCurrent = idx === activeIndex; let color = 'bg-slate-200 text-slate-400'; if (isActive) { if (idx === 0) color = 'bg-red-600 text-white'; else if (idx === 1) color = 'bg-yellow-500 text-white'; else if (idx === 2) color = 'bg-lime-500 text-white'; else if (idx === 3) color = 'bg-green-700 text-white'; } html += `<div class="relative flex items-start group ${isActive ? '' : 'opacity-50'}"><div class="w-8 h-8 rounded-full flex items-center justify-center relative z-10 transition-all ${color} ${isCurrent ? 'scale-110 ring-4 ring-white shadow-lg' : ''}"><i data-lucide="${step.i}" class="w-4 h-4"></i></div><div class="ml-6 pt-1"><h4 class="font-bold text-slate-900">${step.t}</h4><p class="text-xs text-slate-500">${step.s}</p></div></div>`; }); html += `</div>`; container.innerHTML = html; renderIcons(); } else { container.innerHTML = `<div class="text-red-500 p-4 font-bold text-center">STO Not Found</div>`; } } catch(err) { container.innerHTML = `<div class="bg-red-50 text-red-500 p-4">Connection Error</div>`; renderIcons(); } };
-        
         const handleZerpdUploadAction = async (input) => { const file = input.files[0]; if(!file) return; const today = new Date(); const y = today.getFullYear(), m = String(today.getMonth()+1).padStart(2,'0'), d = String(today.getDate()).padStart(2,'0'); const fmt1 = `${y}${m}${d}`, fmt2 = `${d}${m}${y}`; const fname = file.name.toUpperCase(); if ((!fname.includes(fmt1) && !fname.includes(fmt2)) || !fname.includes("ZERPD ALL SITE")) { alert(`Nama file tidak valid!`); input.value = ''; return; } document.getElementById('zerpdStatus').textContent = "Processing..."; try { const buffer = await file.arrayBuffer(); const workbook = XLSX.read(new Uint8Array(buffer), { type: 'array' }); const jsonData = XLSX.utils.sheet_to_json(workbook.Sheets[workbook.SheetNames[0]], { header: 1 }); const headers = jsonData[0].map(h => String(h).toLowerCase().replace(/[^a-z0-9]/g, '')); let mpnIdx = headers.findIndex(h => h.includes('manufact') && (h.includes('part')||h.includes('no'))); let matIdx = headers.findIndex(h => h.includes('material') && !h.includes('desc')); if(mpnIdx === -1) mpnIdx = 2; if(matIdx === -1) matIdx = 0; AppState.zerpdData.clear(); let count = 0; for(let i=1; i<jsonData.length; i++) { const row = jsonData[i]; if (row) { const mpn = String(row[mpnIdx]||'').trim(); const mat = String(row[matIdx]||'').trim(); if(mpn.length > 1) { AppState.zerpdData.set(normalizeString(mpn), {orig:mpn, mat:mat}); count++; } } } AppState.isZerpdUploaded = true; render(); alert(`ZERPD Loaded: ${count} Records`); } catch(e) { alert("Error reading file"); input.value = ''; } };
-        
         const deleteZerpdFileAction = () => { if(!confirm("Hapus file?")) return; AppState.zerpdData.clear(); AppState.isZerpdUploaded = false; AppState.isCatalogLocked = true; render(); };
-        
         const checkPartNumberAction = () => { const input = document.getElementById('inputMPN'); const status = document.getElementById('mpnStatus'); const normVal = normalizeString(input.value.trim()); if(!normVal) { status.textContent = "Enter Part Number"; return; } if(AppState.zerpdData.has(normVal)) { const data = AppState.zerpdData.get(normVal); status.textContent = "❌ DUPLICATE FOUND"; status.className = "text-sm font-bold ml-2 text-red-600"; document.getElementById('existingMPNDisplay').textContent = data.orig; document.getElementById('existingMatDisplay').textContent = data.mat; document.getElementById('duplicateWarning').classList.remove('hidden'); AppState.isCatalogLocked = true; window.lockFields(); } else { status.textContent = "✅ AVAILABLE"; status.className = "text-sm font-bold ml-2 text-green-600"; document.getElementById('duplicateWarning').classList.add('hidden'); AppState.isCatalogLocked = false; window.unlockFields(); } };
-        
         const lockFieldsAction = () => { document.querySelectorAll('.master-data-field').forEach(f => { f.disabled = true; f.classList.add('bg-slate-100','cursor-not-allowed'); }); const btn = document.getElementById('submitBtn'); if(btn) { btn.disabled = true; btn.innerHTML = `<i data-lucide="lock" class="w-5 h-5 mr-2"></i> Verify MPN to Unlock`; btn.className = "w-full bg-slate-300 text-white font-bold py-4 rounded-md shadow-none flex justify-center items-center text-lg cursor-not-allowed"; } renderIcons(); };
-        
         const unlockFieldsAction = () => { document.querySelectorAll('.master-data-field').forEach(f => { f.disabled = false; f.classList.remove('bg-slate-100','cursor-not-allowed'); }); const btn = document.getElementById('submitBtn'); if(btn) { btn.disabled = false; btn.innerHTML = `<i data-lucide="send" class="w-5 h-5 mr-2"></i> Submit Master Data Request`; btn.className = "w-full bg-orange-500 hover:bg-orange-600 text-white font-bold py-4 rounded-md shadow-lg flex justify-center items-center text-lg"; } renderIcons(); };
-        
         const handleCatalogSubmitAction = async (e) => { e.preventDefault(); if (isFirebaseAvailable) { if(!auth.currentUser) try { await signInAnonymously(auth); } catch(err) {} } alert("Request Submitted Successfully!"); e.target.reset(); window.deleteZerpdFile(); };
 
         // --- 5. COMPONENT GENERATORS ---
@@ -627,6 +655,19 @@
             </div>`;
         }
         
+        function renderCatalog() {
+            const plantOptions = Array.from({length: 28}, (_, i) => `<option value="PL${String(i + 1).padStart(2, '0')}">PL${String(i + 1).padStart(2, '0')}</option>`).join('');
+            const storageLocOptions = Array.from({length: 15}, (_, i) => `<option value="S${String(i + 1).padStart(3, '0')}">S${String(i + 1).padStart(3, '0')}</option>`).join('');
+            const mtOpts = ["SPRT","FOGC","TIRE","CONS","GENS","ASET","SEJA","MDLE","BOMM","FFF"].map(c=>`<option value="${c}">${c}</option>`).join('');
+            const matGroups = ["S001", "S002", "S003", "S004", "S005", "S006", "F001", "F002", "F003", "F004", "T001", "G001", "G002", "C001", "C002", "C003", "C004", "C005", "C006", "C007", "A001", "A002", "A003", "A004", "A005", "A006", "J001", "J002", "J003", "J004", "J005", "J006", "J007", "J008", "J009", "J010", "J011", "J012", "J013", "J014", "J015", "M001"].map(c=>`<option value="${c}">${c}</option>`).join('');
+            const purchGroups = ["G01", "G02", "G03", "G04", "G05", "G06", "G07"].map(c=>`<option value="${c}">${c}</option>`).join('');
+            const valClasses = ["V001", "V002", "V003", "V004", "V005", "V006", "V007", "V008", "V009", "V010", "V011", "V012", "V013", "V014", "V015", "V016", "V017", "V018", "V019", "V020", "V021", "V022", "V023", "V024", "V025", "V026", "V027", "V028", "V029", "V030", "V031", "V032", "V033", "V034", "V035"].map(c=>`<option value="${c}">${c}</option>`).join('');
+            const lockedClass = AppState.isCatalogLocked ? "bg-slate-100 text-slate-400 cursor-not-allowed border-slate-200 master-data-field" : "";
+            const disabledAttr = AppState.isCatalogLocked ? "disabled" : "";
+
+            return `<div class="min-h-screen pt-24 pb-12 bg-slate-50 text-slate-900 animate-in"><div class="max-w-6xl mx-auto px-4"><button onclick="window.nav('home')" class="mb-6 flex items-center text-slate-500 hover:text-orange-600 font-medium text-sm"><i data-lucide="arrow-left" class="w-4 h-4 mr-2"></i> Back to Home</button><div class="bg-white rounded-xl shadow-xl overflow-hidden border border-slate-200"><div class="bg-slate-900 p-8 text-white"><h2 class="text-3xl font-bold mb-2 flex items-center"><i data-lucide="file-text" class="mr-3 text-orange-500"></i> New Material Request</h2><p class="text-slate-400">Formulir registrasi Master Data Material baru.</p></div><div class="p-8"><div class="bg-orange-50 border border-orange-200 rounded-lg p-6 mb-8"><div class="flex justify-between items-start"><div><h4 class="font-bold text-orange-800 mb-2 flex items-center"><i data-lucide="shield-check" class="w-5 h-5 mr-2"></i> Duplicate Check (ZERPD)</h4><p class="text-sm text-orange-700 mb-4">Upload file <strong>ZERPD.xlsx</strong> (Format: [Tanggal] ZERPD ALL SITE) untuk membuka formulir.</p></div>${AppState.isZerpdUploaded ? `<button onclick="window.deleteZerpdFile()" class="text-red-500 hover:text-red-700 flex items-center text-sm font-bold"><i data-lucide="trash-2" class="w-4 h-4 mr-1"></i> Remove File</button>` : ''}</div>${!AppState.isZerpdUploaded ? `<input type="file" accept=".xlsx" onchange="window.handleZerpdUpload(this)" class="block w-full text-sm text-slate-500 file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-sm file:font-semibold file:bg-orange-500 file:text-white hover:file:bg-orange-600"/>` : `<div class="text-sm font-bold text-green-600">ZERPD File Loaded. Ready to verify.</div>`}<div id="zerpdStatus" class="text-sm font-bold text-slate-400 mt-2">Waiting for file...</div></div><form onsubmit="window.handleCatalogSubmit(event)" class="space-y-8"><div class="bg-slate-50 p-6 rounded-lg border border-slate-200"><h4 class="font-bold text-slate-800 mb-4 pb-2 border-b border-slate-300 flex items-center"><i data-lucide="user" class="w-4 h-4 mr-2 text-orange-500"></i> Requester Information</h4><div class="grid grid-cols-1 md:grid-cols-2 gap-6"><div><label class="block text-xs font-bold text-slate-500 uppercase mb-1">Requester Name</label><input required name="requester_name" type="text" class="w-full px-3 py-2 border border-slate-300 rounded focus:ring-2 focus:ring-orange-500 outline-none"></div><div><label class="block text-xs font-bold text-slate-500 uppercase mb-1">Department</label><input required name="department" type="text" class="w-full px-3 py-2 border border-slate-300 rounded focus:ring-2 focus:ring-orange-500 outline-none"></div></div></div><div class="bg-blue-50 p-6 rounded-lg border border-blue-200"><h4 class="font-bold text-blue-900 mb-4 pb-2 border-b border-blue-300 flex items-center"><i data-lucide="search" class="w-4 h-4 mr-2"></i> Part Number Verification</h4><div class="grid grid-cols-1 md:grid-cols-2 gap-4"><div class="relative"><label class="block text-xs font-bold text-slate-500 uppercase mb-1">Manufacturing Part Number</label><div class="flex gap-2"><input id="inputMPN" name="manuf_part_number" disabled type="text" class="w-full px-3 py-2 border border-slate-300 rounded focus:ring-2 focus:ring-blue-500 outline-none ${!AppState.isZerpdUploaded?'bg-slate-100 cursor-not-allowed':''}" placeholder="Upload ZERPD first..."><button type="button" onclick="window.checkPartNumber()" ${!AppState.isZerpdUploaded ? 'disabled' : ''} class="bg-blue-600 text-white px-6 py-2 rounded text-xs font-bold hover:bg-blue-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed" id="btnVerifyMPN" disabled>VERIFY</button></div></div><div class="flex items-center"><p id="mpnStatus" class="text-sm font-bold ml-2"></p></div><div class="md:col-span-2 hidden" id="duplicateWarning"><div class="bg-red-100 border-l-4 border-red-500 text-red-700 p-4 rounded shadow-sm"><div class="flex items-start"><i data-lucide="alert-triangle" class="w-5 h-5 mr-2 mt-0.5"></i><div><p class="font-bold">Mohon pastikan kembali PN dikarenakan PN sdh terdaftar di ZERPD</p><p class="text-sm mt-1">Existing Match: <span id="existingMPNDisplay" class="font-mono bg-red-200 px-1 rounded"></span> (Material: <span id="existingMatDisplay" class="font-mono"></span>)</p></div></div></div></div></div></div><div><h4 class="font-bold text-slate-800 mb-4 flex items-center"><i data-lucide="box" class="w-4 h-4 mr-2 text-orange-500"></i> 1. Basic Material Data</h4><div class="grid grid-cols-1 md:grid-cols-3 gap-4"><div class="md:col-span-3"><label class="block text-xs font-bold text-slate-500 uppercase mb-1">Description</label><input required ${disabledAttr} name="description" type="text" class="w-full px-3 py-2 border border-slate-300 rounded outline-none ${lockedClass}" placeholder="Material Description"></div><div><label class="block text-xs font-bold text-slate-500 uppercase mb-1">Old Material</label><input ${disabledAttr} name="old_material" type="text" class="w-full px-3 py-2 border border-slate-300 rounded outline-none ${lockedClass}"></div><div><label class="block text-xs font-bold text-slate-500 uppercase mb-1">Type</label><select ${disabledAttr} name="mat_type" class="w-full px-3 py-2 border border-slate-300 rounded outline-none ${lockedClass}"><option value="">Select...</option>${mtOpts}</select></div><div><label class="block text-xs font-bold text-slate-500 uppercase mb-1">Group</label><select ${disabledAttr} name="mat_group" class="w-full px-3 py-2 border border-slate-300 rounded outline-none ${lockedClass}"><option value="">Select...</option>${matGroups}</select></div><div><label class="block text-xs font-bold text-slate-500 uppercase mb-1">Plant</label><select required ${disabledAttr} name="plant" class="w-full px-3 py-2 border border-slate-300 rounded outline-none ${lockedClass}"><option value="">Select...</option>${plantOptions}</select></div><div><label class="block text-xs font-bold text-slate-500 uppercase mb-1">Base UoM</label><input ${disabledAttr} name="base_uom" class="w-full px-3 py-2 border border-slate-300 rounded outline-none ${lockedClass}"></div></div></div><div><h4 class="font-bold text-slate-800 mb-4 flex items-center"><i data-lucide="settings" class="w-4 h-4 mr-2 text-orange-500"></i> 2. Mfg & Purchasing</h4><div class="grid grid-cols-1 md:grid-cols-3 gap-4"><div><label class="block text-xs font-bold text-slate-500 uppercase mb-1">Part Profile</label><input ${disabledAttr} name="manuf_profile" class="w-full px-3 py-2 border border-slate-300 rounded outline-none ${lockedClass}"></div><div><label class="block text-xs font-bold text-slate-500 uppercase mb-1">Purch Group</label><select ${disabledAttr} name="purch_group" class="w-full px-3 py-2 border border-slate-300 rounded outline-none ${lockedClass}"><option value="">Select...</option>${purchGroups}</select></div><div><label class="block text-xs font-bold text-slate-500 uppercase mb-1">Auto PO</label><select ${disabledAttr} name="auto_po" class="w-full px-3 py-2 border border-slate-300 rounded outline-none ${lockedClass}"><option>Yes</option><option>No</option></select></div></div></div><div><h4 class="font-bold text-slate-800 mb-4 flex items-center"><i data-lucide="bar-chart-2" class="w-4 h-4 mr-2 text-orange-500"></i> 3. MRP</h4><div class="grid grid-cols-1 md:grid-cols-4 gap-4"><div><label class="block text-xs font-bold text-slate-500 uppercase mb-1">MRP Type</label><input ${disabledAttr} value="ND" class="w-full px-3 py-2 border border-slate-300 rounded outline-none ${lockedClass}" readonly></div><div><label class="block text-xs font-bold text-slate-500 uppercase mb-1">Controller</label><input ${disabledAttr} value="M01" class="w-full px-3 py-2 border border-slate-300 rounded outline-none ${lockedClass}" readonly></div><div><label class="block text-xs font-bold text-slate-500 uppercase mb-1">Reorder</label><input ${disabledAttr} value="0" class="w-full px-3 py-2 border border-slate-300 rounded outline-none ${lockedClass}" readonly></div><div><label class="block text-xs font-bold text-slate-500 uppercase mb-1">Lot Size</label><input ${disabledAttr} name="lot" class="w-full px-3 py-2 border border-slate-300 rounded outline-none ${lockedClass}"></div></div></div><div><h4 class="font-bold text-slate-800 mb-4 flex items-center"><i data-lucide="warehouse" class="w-4 h-4 mr-2 text-orange-500"></i> 4. Storage</h4><div class="grid grid-cols-1 md:grid-cols-3 gap-4"><div><label class="block text-xs font-bold text-slate-500 uppercase mb-1">Valuation Class</label><select ${disabledAttr} name="val_class" class="w-full px-3 py-2 border border-slate-300 rounded outline-none ${lockedClass}"><option value="">Select...</option>${valClasses}</select></div><div><label class="block text-xs font-bold text-slate-500 uppercase mb-1">Storage Loc</label><select ${disabledAttr} name="sloc" class="w-full px-3 py-2 border border-slate-300 rounded outline-none ${lockedClass}"><option value="">Select...</option>${storageLocOptions}</select></div><div><label class="block text-xs font-bold text-slate-500 uppercase mb-1">Bin</label><input ${disabledAttr} name="bin" class="w-full px-3 py-2 border border-slate-300 rounded outline-none ${lockedClass}"></div></div></div><div class="pt-6 border-t border-slate-200"><button type="submit" ${disabledAttr} class="w-full bg-orange-500 hover:bg-orange-600 text-white font-bold py-4 rounded-md shadow-lg flex justify-center items-center text-lg disabled:bg-slate-300 disabled:shadow-none disabled:cursor-not-allowed">${AppState.isCatalogLocked ? `<i data-lucide="lock" class="w-5 h-5 mr-2"></i> Verify MPN to Unlock` : `<i data-lucide="send" class="w-5 h-5 mr-2"></i> Submit Request`}</button></div></form></div></div></div></div>`;
+        }
+
         // --- 6. RENDER MAIN (Define render function here) ---
         function render() {
             const root = document.getElementById('app-root');
