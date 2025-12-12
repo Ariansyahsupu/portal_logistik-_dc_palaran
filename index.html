@@ -30,6 +30,7 @@
         html { scroll-behavior: smooth; }
         
         .locked-field { @apply bg-slate-100 text-slate-400 cursor-not-allowed border-slate-200 pointer-events-none; }
+        .clickable-row { @apply cursor-pointer hover:bg-orange-50 transition-colors border-l-4 border-transparent hover:border-orange-500; }
     </style>
 </head>
 <body class="bg-slate-50 text-slate-900 selection:bg-orange-500 selection:text-white">
@@ -75,10 +76,12 @@
             mobileMenuOpen: false,
             reportView: 'YTD', 
             selectedWeek: 1,
+            selectedMonth: null,
             zerpdData: new Map(),
             isZerpdUploaded: false,
             isCatalogLocked: true,
-            dashboardData: [],
+            dashboardData: [], 
+            monthlyBreakdown: [],
             pendingGR: []
         };
 
@@ -122,6 +125,32 @@
             return isNaN(date.getTime()) ? null : date;
         };
 
+        const getMonthName = (dateStr) => {
+            if(!dateStr || typeof dateStr !== 'string' || dateStr.trim() === '') return "Mei-Agustus";
+            
+            const cleanStr = dateStr.trim();
+            const monthsID = ["Januari", "Februari", "Maret", "April", "Mei", "Juni", "Juli", "Agustus", "September", "Oktober", "November", "Desember"];
+            const match = monthsID.find(m => cleanStr.toLowerCase().includes(m.toLowerCase()));
+            if(match) return match;
+
+            const monthsEN = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
+            const idxEN = monthsEN.findIndex(m => cleanStr.toLowerCase().includes(m.toLowerCase()));
+            if(idxEN !== -1) return monthsID[idxEN];
+
+            let engDateStr = cleanStr
+                .replace(/Januari/i, 'January').replace(/Februari/i, 'February').replace(/Maret/i, 'March')
+                .replace(/Mei/i, 'May').replace(/Juni/i, 'June').replace(/Juli/i, 'July')
+                .replace(/Agustus/i, 'August').replace(/Oktober/i, 'October').replace(/Desember/i, 'December');
+
+            const date = parseDateFlexible(engDateStr);
+            if(date) {
+                return date.toLocaleString('id-ID', { month: 'long' });
+            }
+
+            if (isNaN(cleanStr) && cleanStr.length > 2) return cleanStr;
+            return "Unknown";
+        };
+
         // --- Chart Utils ---
         const generateDonutChartSVG = (data, centerText = "Total", centerValue = "") => {
             const total = data.reduce((acc, curr) => acc + curr.value, 0);
@@ -151,10 +180,8 @@
             return `<div class="relative flex justify-center items-center"><svg viewBox="-1 -1 2 2" width="${size}" height="${size}" style="transform: rotate(-90deg)">${paths}<circle cx="0" cy="0" r="0.6" fill="white" /></svg><div class="absolute inset-0 flex flex-col items-center justify-center text-slate-800"><span class="text-[10px] font-bold uppercase text-slate-400">${centerText}</span><span class="text-xs font-extrabold">${centerValue || formatIDR(total).replace('Rp', '')}</span></div></div>`;
         };
 
-        // --- Data Logic ---
-        const generateReportData = () => {
-            return []; // Return empty, let fetch handle it
-        };
+        // --- Data Placeholder ---
+        const generateReportData = () => [];
 
         // --- HTML Generator Helpers ---
         const generatePendingGRHtml = () => {
@@ -182,15 +209,19 @@
                 </div>`;
         };
 
-        // --- EXPOSED FUNCTIONS ---
+        // --- EXPOSED WINDOW FUNCTIONS ---
+        window.setMonth = (monthName) => {
+            AppState.selectedMonth = monthName;
+            render();
+        };
+
+        window.clearMonth = () => {
+            AppState.selectedMonth = null;
+            render();
+        };
         
         window.fetchDashboardData = async () => {
-             // 1. Fetch Alarm Data
-             const mockPendingItems = [
-                 { sto: '4500123456', project: 'PL01 MSJ', days: 45, date: '2023-10-01' },
-                 { sto: '4500987654', project: 'PL14 TJP', days: 32, date: '2023-10-15' },
-                 { sto: '4500555111', project: 'PL22 MRW', days: 60, date: '2023-09-12' }
-             ];
+             const mockPendingItems = [{ sto: '4500123456', project: 'PL01 MSJ', days: 45, date: '2023-10-01' }];
 
              try {
                 const alarmSheetUrl = 'https://docs.google.com/spreadsheets/d/1ULpZq-bZwvTaEfQ3EcnfTjOm3mOW23rhxGK1OZYBesI/export?format=csv&gid=0';
@@ -200,7 +231,6 @@
                     const rows = parseCSV(text).slice(1);
                     let pendingItems = [];
                     const today = new Date();
-
                     rows.forEach(row => {
                         if (!row || row.length < 7) return; 
                         const sto = row[6];
@@ -211,43 +241,48 @@
                             const sentDate = parseDateFlexible(dateStr);
                             if (sentDate) {
                                 const diff = Math.ceil(Math.abs(today - sentDate) / (1000 * 60 * 60 * 24));
-                                if (diff > 30) {
-                                    pendingItems.push({ sto, project, days: diff, date: dateStr });
-                                }
+                                if (diff > 30) pendingItems.push({ sto, project, days: diff, date: dateStr });
                             }
                         }
                     });
                     AppState.pendingGR = pendingItems.length > 0 ? pendingItems.slice(0, 5) : mockPendingItems;
                 }
-            } catch(e) { 
-                console.warn("Alarm Fetch Failed:", e.message);
-                AppState.pendingGR = mockPendingItems;
-            }
+            } catch(e) { console.warn("Alarm Fetch Failed:", e.message); AppState.pendingGR = mockPendingItems; }
 
-            // 2. Fetch Utilization Data with Aggregation
             const utilSheetUrl = 'https://docs.google.com/spreadsheets/d/e/2PACX-1vSgvF0NUSq_o9gV90IzgKGAeNiNu3I5KH0D8vde-hHHngl8Pw2HYvPGSdurUe_O0c9LM6aoApnG31TH/pub?gid=1387121170&single=true&output=csv';
-            
             try {
                 const resUtil = await fetch(utilSheetUrl);
                 if(resUtil.ok) {
                     const textUtil = await resUtil.text();
-                    const rowsUtil = parseCSV(textUtil).slice(1); // Skip header
+                    const rowsUtil = parseCSV(textUtil).slice(1);
                     
                     const siteMap = new Map();
+                    const monthMap = new Map(); 
 
                     rowsUtil.forEach(row => {
                         if(!row[8] || !row[10]) return;
-
                         const siteName = row[8].trim();
                         const siteKey = normalizeString(siteName); 
                         let cleanVal = row[10].replace(/[Rp\s.]/g, '').replace(',', '.');
                         const rowValue = parseFloat(cleanVal) || 0;
 
                         if (siteMap.has(siteKey)) {
-                            const existing = siteMap.get(siteKey);
-                            existing.totalValue += rowValue;
+                            siteMap.get(siteKey).totalValue += rowValue;
                         } else {
                             siteMap.set(siteKey, { name: siteName, totalValue: rowValue });
+                        }
+
+                        const monthKey = getMonthName(row[1]);
+                        if (!monthMap.has(monthKey)) {
+                            monthMap.set(monthKey, { total: 0, sites: new Map() });
+                        }
+                        const monthData = monthMap.get(monthKey);
+                        monthData.total += rowValue;
+
+                        if (monthData.sites.has(siteKey)) {
+                            monthData.sites.get(siteKey).value += rowValue;
+                        } else {
+                            monthData.sites.set(siteKey, { name: siteName, value: rowValue });
                         }
                     });
 
@@ -255,53 +290,41 @@
                         const ytdValue = item.totalValue;
                         const monthlyTotal = Math.round(ytdValue / 12); 
                         const weeks = {};
-                        let remaining = monthlyTotal;
                         for(let w=1; w<=5; w++) {
-                            const weekVal = w === 5 ? remaining : Math.round(monthlyTotal / 5.5);
-                            remaining -= weekVal;
-                            weeks[w] = { 
-                                total: weekVal, 
-                                components: { 
-                                    nonSoh: Math.round(weekVal*0.2), 
-                                    sto: Math.round(weekVal*0.6), 
-                                    tf: weekVal - Math.round(weekVal*0.2) - Math.round(weekVal*0.6) 
-                                } 
-                            };
+                            const weekVal = Math.round(monthlyTotal / 5.5);
+                            weeks[w] = { total: weekVal, components: { nonSoh: Math.round(weekVal*0.2), sto: Math.round(weekVal*0.6), tf: weekVal - Math.round(weekVal*0.2) - Math.round(weekVal*0.6) } };
                         }
+                        return { id: normalizeString(item.name), name: item.name, value: ytdValue, ytd: { value: ytdValue }, monthly: { value: monthlyTotal, weeks: weeks } };
+                    });
 
-                        return { 
-                            id: normalizeString(item.name), 
-                            name: item.name, 
-                            ytd: { value: ytdValue, percentage: 0 }, 
-                            monthly: { value: monthlyTotal, percentage: 0, weeks: weeks } 
+                    const totalYTD = newDashboardData.reduce((a,b) => a + b.value, 0);
+                    newDashboardData.forEach(d => { d.percentage = totalYTD > 0 ? (d.value / totalYTD * 100) : 0; });
+                    AppState.dashboardData = newDashboardData.sort((a,b) => b.value - a.value);
+
+                    const newMonthlyData = Array.from(monthMap.entries()).map(([month, data]) => {
+                        const sitesArray = Array.from(data.sites.values()).sort((a,b) => b.value - a.value);
+                        return {
+                            name: month,
+                            value: data.total,
+                            percentage: 0,
+                            sites: sitesArray
                         };
                     });
 
-                    const totalYTD = newDashboardData.reduce((a,b) => a + b.ytd.value, 0);
-                    newDashboardData.forEach(d => {
-                        d.ytd.percentage = totalYTD > 0 ? (d.ytd.value / totalYTD * 100) : 0;
-                        d.monthly.percentage = d.ytd.percentage;
-                    });
-
-                    AppState.dashboardData = newDashboardData.sort((a,b) => b.ytd.value - a.ytd.value);
+                    const totalMonthly = newMonthlyData.reduce((a,b) => a + b.value, 0);
+                    newMonthlyData.forEach(d => { d.percentage = totalMonthly > 0 ? (d.value / totalMonthly * 100) : 0; });
+                    AppState.monthlyBreakdown = newMonthlyData.sort((a,b) => b.value - a.value);
+                    
+                    render(); // Re-render ONLY after data is fetched
                 }
-            } catch(e) {
-                console.error("Utilization Data Fetch Error:", e);
-            }
-
-            if (AppState.currentView === 'dashboard') {
-                 render(); 
-            } else if (AppState.currentView === 'home') {
-                 const container = document.getElementById('pending-gr-container');
-                 if (container) {
-                     container.innerHTML = generatePendingGRHtml();
-                     renderIcons();
-                 }
-            }
+            } catch(e) { console.error("Utilization Fetch Error:", e); }
         };
 
         window.nav = (view, sectionId) => {
             AppState.currentView = view;
+            if(view === 'dashboard' && AppState.dashboardData.length === 0) {
+                 fetchDashboardData();
+            }
             render();
             if(sectionId) {
                 setTimeout(() => {
@@ -315,228 +338,25 @@
         };
 
         window.toggleMenu = () => { AppState.mobileMenuOpen = !AppState.mobileMenuOpen; render(); };
-        window.setReportView = (v) => { AppState.reportView = v; render(); };
+        window.setReportView = (v) => { 
+            AppState.reportView = v; 
+            AppState.selectedMonth = null; 
+            render(); 
+        };
         window.setWeek = (w) => { AppState.selectedWeek = w; render(); };
         window.runBlock = () => window.open('https://block-master-dc-palaran.vercel.app/', '_blank');
         window.runPROS = () => window.open('https://analisis-pr-oustanding-dc-palaran.vercel.app/', '_blank');
         window.runFFF = () => window.open('https://fff-class.vercel.app/', '_blank');
         
-        window.handleStockCheck = (e) => {
-            e.preventDefault();
-            const form = e.target;
-            const site = form.site.value;
-            const type = form.type.value;
-            const item = form.item.value;
-            if(!site) return alert("Silakan pilih Project Site (PL).");
-            const message = `Halo Admin DC Palaran, saya ingin cek stock:\n\nSite: ${site}\nItem (${type}): ${item}\n\nMohon informasinya. Terima kasih.`;
-            window.open(`https://wa.me/628115550123?text=${encodeURIComponent(message)}`, '_blank');
-        };
-
-        window.handleTrack = async (e) => {
-            e.preventDefault(); 
-            const inputEl = document.getElementById('stoInput');
-            if(!inputEl) return;
-            const input = inputEl.value.trim(); 
-            const container = document.getElementById('trackingResult');
-            
-            if(!input) return;
-            container.innerHTML = '<div class="text-center p-4 text-slate-500"><i data-lucide="loader-2" class="animate-spin inline mr-2"></i> Searching...</div>'; 
-            container.classList.remove('hidden');
-            renderIcons();
-            
-            const mockTrackData = [
-                { sto: '450012345', status: 'DISPATCH', project: 'PL01 MSJ' },
-                { sto: '123', status: 'DELIVERED', project: 'PL03 BE' }
-            ];
-
-            try {
-                const res = await fetch('https://docs.google.com/spreadsheets/d/1ULpZq-bZwvTaEfQ3EcnfTjOm3mOW23rhxGK1OZYBesI/export?format=csv&gid=0');
-                let found = null;
-
-                if(res.ok) {
-                    const rows = parseCSV(await res.text()); 
-                    found = rows.find(r => r[6] === input); 
-                }
-
-                if (!found) {
-                    const mock = mockTrackData.find(m => m.sto === input);
-                    if (mock) {
-                        found = [];
-                        found[33] = mock.status;
-                        found[35] = mock.project;
-                    }
-                }
-                
-                if(found) {
-                    const rawStatus = (found[33] || '').toUpperCase(); 
-                    const project = found[35] || 'Unknown';
-                    let activeIndex = 0;
-                    
-                    if (rawStatus.includes('WAITING') || rawStatus.includes('PACKING')) activeIndex = 1;
-                    else if (rawStatus.includes('TERKIRIM') || rawStatus.includes('DISPATCH') || rawStatus.includes('JALAN')) activeIndex = 2;
-                    else if (rawStatus.includes('DELIVERED') || rawStatus.includes('SAMPAI') || rawStatus.includes('COMPLETE')) activeIndex = 3;
-
-                    const steps = [
-                        { t: 'Order Confirmed (Realized)', s: 'STO verified by DC Palaran', i: 'check-circle' },
-                        { t: 'Picking & Packing', s: 'Items being retrieved from Bin Location & Staging and manifest generation', i: 'package' },
-                        { t: 'Dispatched', s: 'Handed over to transporter', i: 'truck' },
-                        { t: 'Delivered', s: 'Received at Site Warehouse', i: 'map-pin' }
-                    ];
-
-                    let html = `<div class="bg-slate-50 border border-slate-200 rounded-lg p-4 mb-6 flex justify-between items-center"><div><div class="text-xs text-slate-500 uppercase font-bold">Project</div><div class="text-lg font-bold text-slate-900">${project}</div></div><div class="text-right"><div class="text-xs text-slate-500 uppercase font-bold">Status</div><div class="text-sm font-bold text-orange-600">${rawStatus || 'CONFIRMED'}</div></div></div>`;
-                    html += `<div class="space-y-8 relative pl-2 mt-8"><div class="absolute left-6 top-2 bottom-4 w-0.5 bg-slate-200 -z-10"></div>`;
-                    
-                    steps.forEach((step, idx) => {
-                        const isActive = idx <= activeIndex; 
-                        const isCurrent = idx === activeIndex;
-                        let color = 'bg-slate-200 text-slate-400';
-                        if (isActive) {
-                            if (idx === 0) color = 'bg-red-600 text-white shadow-lg shadow-red-200';      
-                            else if (idx === 1) color = 'bg-yellow-500 text-white shadow-lg shadow-yellow-200'; 
-                            else if (idx === 2) color = 'bg-lime-500 text-white shadow-lg shadow-lime-200';      
-                            else if (idx === 3) color = 'bg-green-700 text-white shadow-lg shadow-green-200';    
-                        }
-                        html += `<div class="relative flex items-start group ${isActive ? '' : 'opacity-50'}"><div class="w-8 h-8 rounded-full flex items-center justify-center relative z-10 transition-all ${color} ${isCurrent ? 'scale-110 ring-4 ring-white shadow-lg' : ''}"><i data-lucide="${step.i}" class="w-4 h-4"></i></div><div class="ml-6 pt-1"><h4 class="font-bold text-slate-900">${step.t}</h4><p class="text-xs text-slate-500">${step.s}</p></div></div>`;
-                    });
-                    
-                    html += `</div>`; 
-                    container.innerHTML = html; 
-                    renderIcons();
-                } else { 
-                    container.innerHTML = `<div class="text-red-500 p-4 font-bold text-center">STO Not Found<br><span class="text-xs text-slate-400 font-normal">Try mock data: 450012345 or 123</span></div>`; 
-                }
-            } catch(err) { 
-                console.error(err);
-                container.innerHTML = `<div class="bg-red-50 text-red-500 p-4 rounded border border-red-100 flex flex-col items-center justify-center text-center"><i data-lucide="wifi-off" class="w-8 h-8 mb-2"></i><p class="font-bold">Connection Error</p><p class="text-xs mt-1">Please ensure the Google Sheet is published to the web as CSV.</p></div>`; 
-                renderIcons();
-            }
-        };
-
-        // ZERPD Handlers
-        window.handleZerpdUpload = async (input) => {
-            const file = input.files[0];
-            if(!file) return;
-
-            const today = new Date();
-            const y = today.getFullYear(), m = String(today.getMonth()+1).padStart(2,'0'), d = String(today.getDate()).padStart(2,'0');
-            const fmt1 = `${y}${m}${d}`, fmt2 = `${d}${m}${y}`;
-
-            const fname = file.name.toUpperCase();
-            if ((!fname.includes(fmt1) && !fname.includes(fmt2)) || !fname.includes("ZERPD ALL SITE")) {
-                alert(`Nama file tidak valid! Format: [Tanggal] ZERPD ALL SITE\nContoh: ${fmt2} ZERPD ALL SITE.xlsx`);
-                input.value = ''; return;
-            }
-
-            document.getElementById('zerpdStatus').textContent = "Processing...";
-            try {
-                const buffer = await file.arrayBuffer();
-                const workbook = XLSX.read(new Uint8Array(buffer), { type: 'array' });
-                const jsonData = XLSX.utils.sheet_to_json(workbook.Sheets[workbook.SheetNames[0]], { header: 1 });
-
-                if(jsonData.length < 2) throw new Error("Empty");
-                const headers = jsonData[0].map(h => String(h).toLowerCase().replace(/[^a-z0-9]/g, ''));
-                let mpnIdx = headers.findIndex(h => h.includes('manufact') && (h.includes('part')||h.includes('no')));
-                let matIdx = headers.findIndex(h => h.includes('material') && !h.includes('desc'));
-                
-                if(mpnIdx === -1) mpnIdx = 2; 
-                if(matIdx === -1) matIdx = 0; 
-
-                AppState.zerpdData.clear();
-                let count = 0;
-                for(let i=1; i<jsonData.length; i++) {
-                    const row = jsonData[i];
-                    if (row) {
-                        const mpn = String(row[mpnIdx]||'').trim();
-                        const mat = String(row[matIdx]||'').trim();
-                        if(mpn.length > 1) { AppState.zerpdData.set(normalizeString(mpn), {orig:mpn, mat:mat}); count++; }
-                    }
-                }
-                
-                AppState.isZerpdUploaded = true;
-                render(); 
-                alert(`ZERPD Loaded: ${count} Records`);
-            } catch(e) { console.error(e); alert("Error reading file or Invalid Format"); input.value = ''; }
-        };
-
-        window.deleteZerpdFile = () => {
-            if(!confirm("Hapus file? Form akan terkunci.")) return;
-            AppState.zerpdData.clear();
-            AppState.isZerpdUploaded = false;
-            AppState.isCatalogLocked = true;
-            render();
-        };
-
-        window.checkPartNumber = () => {
-            const input = document.getElementById('inputMPN');
-            const status = document.getElementById('mpnStatus');
-            const normVal = normalizeString(input.value.trim());
-
-            if(!normVal) { status.textContent = "Enter Part Number"; return; }
-
-            if(AppState.zerpdData.has(normVal)) {
-                const data = AppState.zerpdData.get(normVal);
-                status.textContent = "❌ DUPLICATE FOUND"; status.className = "text-sm font-bold ml-2 text-red-600";
-                const exMPN = document.getElementById('existingMPNDisplay');
-                const exMat = document.getElementById('existingMatDisplay');
-                if(exMPN) exMPN.textContent = data.orig;
-                if(exMat) exMat.textContent = data.mat;
-                const warn = document.getElementById('duplicateWarning');
-                if(warn) warn.classList.remove('hidden');
-                
-                AppState.isCatalogLocked = true;
-                window.lockFields();
-            } else {
-                status.textContent = "✅ AVAILABLE"; status.className = "text-sm font-bold ml-2 text-green-600";
-                const warn = document.getElementById('duplicateWarning');
-                if(warn) warn.classList.add('hidden');
-                AppState.isCatalogLocked = false;
-                window.unlockFields();
-            }
-        };
+        window.handleStockCheck = (e) => { e.preventDefault(); const form = e.target; const site = form.site.value; const type = form.type.value; const item = form.item.value; if(!site) return alert("Silakan pilih Project Site (PL)."); const message = `Halo Admin DC Palaran, saya ingin cek stock:\n\nSite: ${site}\nItem (${type}): ${item}\n\nMohon informasinya. Terima kasih.`; window.open(`https://wa.me/628115550123?text=${encodeURIComponent(message)}`, '_blank'); };
         
-        window.lockFields = () => {
-            document.querySelectorAll('.master-data-field').forEach(f => {
-                f.disabled = true; 
-                f.classList.add('bg-slate-100','cursor-not-allowed');
-            });
-            const btn = document.getElementById('submitBtn');
-            if(btn) { 
-                btn.disabled = true; 
-                btn.innerHTML = `<i data-lucide="lock" class="w-5 h-5 mr-2"></i> Verify MPN to Unlock`; 
-                btn.className = "w-full bg-slate-300 text-white font-bold py-4 rounded-md shadow-none flex justify-center items-center text-lg cursor-not-allowed"; 
-            }
-            renderIcons();
-        };
-
-        window.unlockFields = () => {
-            document.querySelectorAll('.master-data-field').forEach(f => {
-                f.disabled = false; 
-                f.classList.remove('bg-slate-100','cursor-not-allowed');
-            });
-            const btn = document.getElementById('submitBtn');
-            if(btn) { 
-                btn.disabled = false; 
-                btn.innerHTML = `<i data-lucide="send" class="w-5 h-5 mr-2"></i> Submit Master Data Request`; 
-                btn.className = "w-full bg-orange-500 hover:bg-orange-600 text-white font-bold py-4 rounded-md shadow-lg flex justify-center items-center text-lg"; 
-            }
-            renderIcons();
-        };
-
-        window.handleCatalogSubmit = async (e) => {
-            e.preventDefault();
-            
-            if (isFirebaseAvailable) {
-                if(!auth.currentUser) { 
-                    try { await signInAnonymously(auth); } catch(err) { console.error("Auth Error:", err); } 
-                }
-            } else {
-                console.log("Submitting in offline mode");
-            }
-
-            alert("Request Submitted Successfully!");
-            e.target.reset();
-            window.deleteZerpdFile(); 
-        };
+        window.handleTrack = async (e) => { e.preventDefault(); const inputEl = document.getElementById('stoInput'); if(!inputEl) return; const input = inputEl.value.trim(); const container = document.getElementById('trackingResult'); if(!input) return; container.innerHTML = '<div class="text-center p-4 text-slate-500"><i data-lucide="loader-2" class="animate-spin inline mr-2"></i> Searching...</div>'; container.classList.remove('hidden'); renderIcons(); const mockTrackData = [{ sto: '450012345', status: 'DISPATCH', project: 'PL01 MSJ' }, { sto: '123', status: 'DELIVERED', project: 'PL03 BE' }]; try { const res = await fetch('https://docs.google.com/spreadsheets/d/1ULpZq-bZwvTaEfQ3EcnfTjOm3mOW23rhxGK1OZYBesI/export?format=csv&gid=0'); let found = null; if(res.ok) { const rows = parseCSV(await res.text()); found = rows.find(r => r[6] === input); } if (!found) { const mock = mockTrackData.find(m => m.sto === input); if (mock) { found = []; found[33] = mock.status; found[35] = mock.project; } } if(found) { const rawStatus = (found[33] || '').toUpperCase(); const project = found[35] || 'Unknown'; let activeIndex = 0; if (rawStatus.includes('WAITING') || rawStatus.includes('PACKING')) activeIndex = 1; else if (rawStatus.includes('TERKIRIM') || rawStatus.includes('DISPATCH') || rawStatus.includes('JALAN')) activeIndex = 2; else if (rawStatus.includes('DELIVERED') || rawStatus.includes('SAMPAI') || rawStatus.includes('COMPLETE')) activeIndex = 3; const steps = [{ t: 'Order Confirmed', s: 'STO verified', i: 'check-circle' }, { t: 'Picking & Packing', s: 'In Warehouse', i: 'package' }, { t: 'Dispatched', s: 'Handed over', i: 'truck' }, { t: 'Delivered', s: 'Received at Site', i: 'map-pin' }]; let html = `<div class="bg-slate-50 border border-slate-200 rounded-lg p-4 mb-6 flex justify-between items-center"><div><div class="text-xs text-slate-500 uppercase font-bold">Project</div><div class="text-lg font-bold text-slate-900">${project}</div></div><div class="text-right"><div class="text-xs text-slate-500 uppercase font-bold">Status</div><div class="text-sm font-bold text-orange-600">${rawStatus || 'CONFIRMED'}</div></div></div>`; html += `<div class="space-y-8 relative pl-2 mt-8"><div class="absolute left-6 top-2 bottom-4 w-0.5 bg-slate-200 -z-10"></div>`; steps.forEach((step, idx) => { const isActive = idx <= activeIndex; const isCurrent = idx === activeIndex; let color = 'bg-slate-200 text-slate-400'; if (isActive) { if (idx === 0) color = 'bg-red-600 text-white'; else if (idx === 1) color = 'bg-yellow-500 text-white'; else if (idx === 2) color = 'bg-lime-500 text-white'; else if (idx === 3) color = 'bg-green-700 text-white'; } html += `<div class="relative flex items-start group ${isActive ? '' : 'opacity-50'}"><div class="w-8 h-8 rounded-full flex items-center justify-center relative z-10 transition-all ${color} ${isCurrent ? 'scale-110 ring-4 ring-white shadow-lg' : ''}"><i data-lucide="${step.i}" class="w-4 h-4"></i></div><div class="ml-6 pt-1"><h4 class="font-bold text-slate-900">${step.t}</h4><p class="text-xs text-slate-500">${step.s}</p></div></div>`; }); html += `</div>`; container.innerHTML = html; renderIcons(); } else { container.innerHTML = `<div class="text-red-500 p-4 font-bold text-center">STO Not Found</div>`; } } catch(err) { container.innerHTML = `<div class="bg-red-50 text-red-500 p-4">Connection Error</div>`; renderIcons(); } };
+        window.handleZerpdUpload = async (input) => { const file = input.files[0]; if(!file) return; const today = new Date(); const y = today.getFullYear(), m = String(today.getMonth()+1).padStart(2,'0'), d = String(today.getDate()).padStart(2,'0'); const fmt1 = `${y}${m}${d}`, fmt2 = `${d}${m}${y}`; const fname = file.name.toUpperCase(); if ((!fname.includes(fmt1) && !fname.includes(fmt2)) || !fname.includes("ZERPD ALL SITE")) { alert(`Nama file tidak valid!`); input.value = ''; return; } document.getElementById('zerpdStatus').textContent = "Processing..."; try { const buffer = await file.arrayBuffer(); const workbook = XLSX.read(new Uint8Array(buffer), { type: 'array' }); const jsonData = XLSX.utils.sheet_to_json(workbook.Sheets[workbook.SheetNames[0]], { header: 1 }); const headers = jsonData[0].map(h => String(h).toLowerCase().replace(/[^a-z0-9]/g, '')); let mpnIdx = headers.findIndex(h => h.includes('manufact') && (h.includes('part')||h.includes('no'))); let matIdx = headers.findIndex(h => h.includes('material') && !h.includes('desc')); if(mpnIdx === -1) mpnIdx = 2; if(matIdx === -1) matIdx = 0; AppState.zerpdData.clear(); let count = 0; for(let i=1; i<jsonData.length; i++) { const row = jsonData[i]; if (row) { const mpn = String(row[mpnIdx]||'').trim(); const mat = String(row[matIdx]||'').trim(); if(mpn.length > 1) { AppState.zerpdData.set(normalizeString(mpn), {orig:mpn, mat:mat}); count++; } } } AppState.isZerpdUploaded = true; render(); alert(`ZERPD Loaded: ${count} Records`); } catch(e) { alert("Error reading file"); input.value = ''; } };
+        window.deleteZerpdFile = () => { if(!confirm("Hapus file?")) return; AppState.zerpdData.clear(); AppState.isZerpdUploaded = false; AppState.isCatalogLocked = true; render(); };
+        window.checkPartNumber = () => { const input = document.getElementById('inputMPN'); const status = document.getElementById('mpnStatus'); const normVal = normalizeString(input.value.trim()); if(!normVal) { status.textContent = "Enter Part Number"; return; } if(AppState.zerpdData.has(normVal)) { const data = AppState.zerpdData.get(normVal); status.textContent = "❌ DUPLICATE FOUND"; status.className = "text-sm font-bold ml-2 text-red-600"; document.getElementById('existingMPNDisplay').textContent = data.orig; document.getElementById('existingMatDisplay').textContent = data.mat; document.getElementById('duplicateWarning').classList.remove('hidden'); AppState.isCatalogLocked = true; window.lockFields(); } else { status.textContent = "✅ AVAILABLE"; status.className = "text-sm font-bold ml-2 text-green-600"; document.getElementById('duplicateWarning').classList.add('hidden'); AppState.isCatalogLocked = false; window.unlockFields(); } };
+        window.lockFields = () => { document.querySelectorAll('.master-data-field').forEach(f => { f.disabled = true; f.classList.add('bg-slate-100','cursor-not-allowed'); }); const btn = document.getElementById('submitBtn'); if(btn) { btn.disabled = true; btn.innerHTML = `<i data-lucide="lock" class="w-5 h-5 mr-2"></i> Verify MPN to Unlock`; btn.className = "w-full bg-slate-300 text-white font-bold py-4 rounded-md shadow-none flex justify-center items-center text-lg cursor-not-allowed"; } renderIcons(); };
+        window.unlockFields = () => { document.querySelectorAll('.master-data-field').forEach(f => { f.disabled = false; f.classList.remove('bg-slate-100','cursor-not-allowed'); }); const btn = document.getElementById('submitBtn'); if(btn) { btn.disabled = false; btn.innerHTML = `<i data-lucide="send" class="w-5 h-5 mr-2"></i> Submit Master Data Request`; btn.className = "w-full bg-orange-500 hover:bg-orange-600 text-white font-bold py-4 rounded-md shadow-lg flex justify-center items-center text-lg"; } renderIcons(); };
+        window.handleCatalogSubmit = async (e) => { e.preventDefault(); if (isFirebaseAvailable) { if(!auth.currentUser) try { await signInAnonymously(auth); } catch(err) {} } alert("Request Submitted Successfully!"); e.target.reset(); window.deleteZerpdFile(); };
 
         // --- RENDERERS ---
         function renderNavbar() {
@@ -549,182 +369,14 @@
         function renderKeyFunctions() { return `<section id="functions" class="py-20 bg-slate-50"><div class="max-w-7xl mx-auto px-4 text-center mb-16"><h2 class="text-3xl md:text-4xl font-bold text-slate-900 mb-4">Key Operational Functions</h2><div class="w-24 h-1 bg-orange-500 mx-auto rounded-full"></div></div><div class="max-w-7xl mx-auto px-4 grid grid-cols-1 md:grid-cols-3 gap-8">${[{icon:'truck',t:'Strategic Transit Hub',d:'Primary consolidation point.'},{icon:'database',t:'Buffer Stock Center',d:'Managing volatility.'},{icon:'bar-chart-3',t:'Inventory Stabilization',d:'Control tower for MIN-MAX.'}].map(f=>`<div class="bg-white rounded-xl shadow-lg p-8 border-t-4 border-transparent hover:border-orange-500 transition-all"><div class="mb-6 bg-slate-50 w-20 h-20 rounded-full flex items-center justify-center"><i data-lucide="${f.icon}" class="h-10 w-10 text-orange-500"></i></div><h3 class="text-xl font-bold text-slate-900 mb-3">${f.t}</h3><p class="text-slate-600">${f.d}</p></div>`).join('')}</div></section>`; }
         function renderCategories() { return `<section id="categories" class="py-20 bg-slate-900 text-white"><div class="max-w-7xl mx-auto px-4 mb-12"><h2 class="text-3xl font-bold mb-2">Material Categories</h2></div><div class="max-w-7xl mx-auto px-4 grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">${[{n:'Spare Parts',i:'settings',img:'1486262715619-67b85e0b08d3'},{n:'Tyres & Rims',i:'layers',img:'1583258509156-f28822026858'},{n:'Components',i:'cpu',img:'1580894732930-0babd100d356'},{n:'General Supplies',i:'box',img:'1595074474855-f9397f8ef5fd'}].map(c=>`<div class="group relative h-96 rounded-lg overflow-hidden cursor-pointer"><img src="https://images.unsplash.com/photo-${c.img}?auto=format&fit=crop&w=600&q=80" class="absolute inset-0 w-full h-full object-cover transition-transform duration-500 group-hover:scale-110"><div class="absolute inset-0 bg-gradient-to-t from-slate-900 via-slate-900/60 to-transparent opacity-90"></div><div class="absolute bottom-0 left-0 p-6 w-full"><div class="bg-orange-500 w-12 h-12 rounded-lg flex items-center justify-center mb-4"><i data-lucide="${c.i}" class="text-white w-6 h-6"></i></div><h3 class="text-xl font-bold mb-2 border-l-4 border-orange-500 pl-3">${c.name}</h3></div></div>`).join('')}</div></section>`; }
         function renderProcess() { return `<section id="process" class="py-20 bg-white"><div class="max-w-7xl mx-auto px-4 text-center mb-16"><h2 class="text-3xl font-bold text-slate-900">Operational Process Flow</h2></div><div class="max-w-7xl mx-auto px-4 relative"><div class="hidden md:block absolute top-1/2 left-0 w-full h-1 bg-slate-200 -translate-y-1/2 z-0"></div><div class="grid grid-cols-1 md:grid-cols-3 gap-12 relative z-10">${['Incoming & QC', 'Inventory Mgmt', 'Outgoing & Dispatch'].map((t,i) => `<div class="bg-white p-6 rounded-xl border border-slate-100 shadow-lg text-center"><div class="w-16 h-16 ${i===1?'bg-orange-500':'bg-slate-900'} text-white rounded-full flex items-center justify-center text-2xl font-bold mx-auto mb-6 ring-8 ring-white">${i+1}</div><h3 class="text-xl font-bold text-slate-800 mb-3">${t}</h3><p class="text-slate-500 text-sm">Critical procedures ensuring operational excellence.</p></div>`).join('')}</div></div></section>`; }
-        
-        function renderTrackingSection() {
-            // Using placeholder ID to allow targeted updates
-            return `<section id="tracking" class="py-20 bg-slate-50 border-b border-slate-200"><div class="max-w-7xl mx-auto px-4"><div class="bg-white rounded-2xl shadow-xl overflow-hidden flex flex-col md:flex-row"><div class="md:w-5/12 bg-slate-900 p-10 text-white flex flex-col justify-center"><h2 class="text-3xl font-bold mb-4 flex items-center"><i data-lucide="search" class="mr-3 text-orange-500"></i> Track Shipment</h2><p class="text-slate-300">Monitor real-time status via STO Number.</p></div><div class="md:w-7/12 p-10"><form onsubmit="window.handleTrack(event)" class="mb-8"><label class="block text-sm font-bold text-slate-900 mb-2 uppercase">Enter STO Number</label><div class="flex gap-2"><input id="stoInput" type="text" placeholder="e.g. 450012345" class="flex-1 px-4 py-3 border border-slate-300 rounded-sm focus:ring-2 focus:ring-orange-500 outline-none"><button type="submit" class="bg-orange-500 text-white font-bold px-8 py-3 rounded-sm hover:bg-orange-600">Track</button></div></form><div id="trackingResult" class="hidden animate-in"></div></div></div><div id="pending-gr-container">${generatePendingGRHtml()}</div></div></section>`;
-        }
-        function renderContact() { const plants = [{code: "PL01", name: "MSJ"}, {code: "PL03", name: "BE"}, {code: "PL06", name: "KALSEL"}, {code: "PL09", name: "MME"}, {code: "PL14", name: "TJP"}, {code: "PL15", name: "GAM"}, {code: "PL18", name: "ABP"}, {code: "PL19", name: "GSP"}, {code: "PL22", name: "MRW"}]; return `<section id="contact" class="py-20 bg-slate-900 text-white"><div class="max-w-7xl mx-auto px-4 grid grid-cols-1 md:grid-cols-2 gap-16"><div><h2 class="text-3xl font-bold mb-6">Contact Control Tower</h2><div class="space-y-6"><div class="flex items-start"><i data-lucide="map-pin" class="w-6 h-6 text-orange-500 mr-4"></i><div><h4 class="font-bold">DC Palaran Main Hub</h4><p class="text-slate-400 text-sm">Jl. Trikora, Palaran, Samarinda</p></div></div><div class="flex items-center"><i data-lucide="phone" class="w-6 h-6 text-orange-500 mr-4"></i><div><h4 class="font-bold">Hotline</h4><p class="text-slate-400 text-sm">+62 811-555-0123</p></div></div></div></div><div class="bg-white rounded-lg p-8 text-slate-900"><h3 class="text-2xl font-bold text-slate-900 mb-6">Quick Stock Check</h3><form onsubmit="window.handleStockCheck(event)" class="space-y-4"><div><label class="block text-sm font-bold mb-2">Project Site</label><select name="site" class="w-full px-4 py-3 bg-slate-100 border-none rounded-sm"><option value="" disabled selected>Select Site...</option>${plants.map(p=>`<option value="${p.name} (${p.code})">${p.name} (${p.code})</option>`).join('')}</select></div><div><label class="block text-sm font-bold mb-2">Search By</label><div class="flex gap-4 mb-2"><label class="flex items-center space-x-2"><input type="radio" name="type" value="Material Number" checked><span>Material Number</span></label><label class="flex items-center space-x-2"><input type="radio" name="type" value="Part Number"><span>Part Number</span></label></div><input name="item" type="text" class="w-full px-4 py-3 bg-slate-100 border-none rounded-sm" placeholder="Enter Number..." required></div><button type="submit" class="w-full bg-green-600 text-white font-bold py-3 rounded-sm hover:bg-green-700 flex items-center justify-center"><i data-lucide="send" class="w-4 h-4 mr-2"></i> Check Stock via WhatsApp</button></form></div></div></section>`; }
+        function renderTrackingSection() { return `<section id="tracking" class="py-20 bg-slate-50 border-b border-slate-200"><div class="max-w-7xl mx-auto px-4"><div class="bg-white rounded-2xl shadow-xl overflow-hidden flex flex-col md:flex-row"><div class="md:w-5/12 bg-slate-900 p-10 text-white flex flex-col justify-center"><h2 class="text-3xl font-bold mb-4 flex items-center"><i data-lucide="search" class="mr-3 text-orange-500"></i> Track Shipment</h2><p class="text-slate-300">Monitor real-time status via STO Number.</p></div><div class="md:w-7/12 p-10"><form onsubmit="window.handleTrack(event)" class="mb-8"><label class="block text-sm font-bold text-slate-900 mb-2 uppercase">Enter STO Number</label><div class="flex gap-2"><input id="stoInput" type="text" placeholder="e.g. 450012345" class="flex-1 px-4 py-3 border border-slate-300 rounded-sm focus:ring-2 focus:ring-orange-500 outline-none"><button type="submit" class="bg-orange-500 text-white font-bold px-8 py-3 rounded-sm hover:bg-orange-600">Track</button></div></form><div id="trackingResult" class="hidden animate-in"></div></div></div><div id="pending-gr-container">${generatePendingGRHtml()}</div></div></section>`; }
+        function renderContact() { return `<section id="contact" class="py-20 bg-slate-900 text-white"><div class="max-w-7xl mx-auto px-4 grid grid-cols-1 md:grid-cols-2 gap-16"><div><h2 class="text-3xl font-bold mb-6">Contact Control Tower</h2><div class="space-y-6"><div class="flex items-start"><i data-lucide="map-pin" class="w-6 h-6 text-orange-500 mr-4"></i><div><h4 class="font-bold">DC Palaran Main Hub</h4><p class="text-slate-400 text-sm">Jl. Trikora, Palaran, Samarinda</p></div></div><div class="flex items-center"><i data-lucide="phone" class="w-6 h-6 text-orange-500 mr-4"></i><div><h4 class="font-bold">Hotline</h4><p class="text-slate-400 text-sm">+62 811-555-0123</p></div></div></div></div><div class="bg-white rounded-lg p-8 text-slate-900"><h3 class="text-2xl font-bold text-slate-900 mb-6">Quick Stock Check</h3><form onsubmit="window.handleStockCheck(event)" class="space-y-4"><div><label class="block text-sm font-bold mb-2">Project Site</label><select name="site" class="w-full px-4 py-3 bg-slate-100 border-none rounded-sm"><option value="" disabled selected>Select Site...</option>${[{code: "PL01", name: "MSJ"}, {code: "PL03", name: "BE"}, {code: "PL06", name: "KALSEL"}, {code: "PL09", name: "MME"}, {code: "PL14", name: "TJP"}, {code: "PL15", name: "GAM"}, {code: "PL18", name: "ABP"}, {code: "PL19", name: "GSP"}, {code: "PL22", name: "MRW"}].map(p=>`<option value="${p.name} (${p.code})">${p.name} (${p.code})</option>`).join('')}</select></div><div><label class="block text-sm font-bold mb-2">Search By</label><div class="flex gap-4 mb-2"><label class="flex items-center space-x-2"><input type="radio" name="type" value="Material Number" checked><span>Material Number</span></label><label class="flex items-center space-x-2"><input type="radio" name="type" value="Part Number"><span>Part Number</span></label></div><input name="item" type="text" class="w-full px-4 py-3 bg-slate-100 border-none rounded-sm" placeholder="Enter Number..." required></div><button type="submit" class="w-full bg-green-600 text-white font-bold py-3 rounded-sm hover:bg-green-700 flex items-center justify-center"><i data-lucide="send" class="w-4 h-4 mr-2"></i> Check Stock via WhatsApp</button></form></div></div></section>`; }
         function renderFooter() { return `<footer class="bg-slate-950 text-slate-400 py-8 text-center"><p>&copy; 2025 DC Palaran. All rights reserved.</p></footer>`; }
-
-        // --- DASHBOARD WITH REPORTS ---
-        function renderDashboard() {
-            if (AppState.dashboardData.length === 0) AppState.dashboardData = generateReportData();
-            
-            const data = AppState.dashboardData;
-            const view = AppState.reportView;
-            const week = AppState.selectedWeek;
-            
-            let totalVal = 0;
-            if (view === 'YTD') totalVal = data.reduce((a, b) => a + b.ytd.value, 0);
-            else if (view === 'Monthly') totalVal = data.reduce((a, b) => a + b.monthly.value, 0);
-            else totalVal = data.reduce((a, b) => a + b.monthly.weeks[week].total, 0);
-
-            // Chart Logic - Bar Chart
-            let barChartHTML = '';
-            if (view === 'Weekly') {
-                const tNonSoh = data.reduce((a, b) => a + b.monthly.weeks[week].components.nonSoh, 0);
-                const tSto = data.reduce((a, b) => a + b.monthly.weeks[week].components.sto, 0);
-                const tTf = data.reduce((a, b) => a + b.monthly.weeks[week].components.tf, 0);
-                const cData = [{v:tSto, c:'#f97316', l:'STO'}, {v:tNonSoh, c:'#3b82f6', l:'Non SOH'}, {v:tTf, c:'#94a3b8', l:'TF Post'}];
-                barChartHTML = `
-                    <div class="text-center">
-                        ${generateDonutChartSVG(cData.map(d=>({value:d.v, color:d.c})))}
-                        <div class="mt-6 grid grid-cols-3 gap-2 text-center">
-                            ${cData.map(d => `<div class="flex flex-col items-center"><span class="w-3 h-3 rounded-full mb-1" style="background:${d.c}"></span><span class="text-[10px] font-bold text-slate-500 uppercase">${d.l}</span><span class="text-xs font-bold text-slate-800">${((d.v/totalVal)*100).toFixed(0)}%</span></div>`).join('')}
-                        </div>
-                    </div>`;
-            } else {
-                const max = Math.max(...data.map(d => view === 'YTD' ? d.ytd.value : d.monthly.value)) * 1.1;
-                barChartHTML = `<div class="space-y-3">${data.map(i => {
-                    const v = view === 'YTD' ? i.ytd.value : i.monthly.value;
-                    return `<div><div class="flex justify-between text-xs font-bold mb-1 text-slate-600"><span>${i.name}</span><span>${formatIDR(v)}</span></div><div class="w-full bg-slate-200 rounded-full h-3 overflow-hidden"><div class="h-full rounded-full bg-gradient-to-r from-orange-400 to-orange-600" style="width:${(v/max)*100}%"></div></div></div>`;
-                }).join('')}</div>`;
-            }
-
-            // New Pie Chart Logic
-            // Calculate slice colors
-            const palette = ['#f97316', '#3b82f6', '#10b981', '#a855f7', '#ec4899', '#64748b'];
-            const pieData = data.map((item, idx) => ({
-                value: item.ytd.value,
-                color: palette[idx % palette.length],
-                label: item.name
-            })).sort((a,b) => b.value - a.value);
-
-            const pieChartHTML = `
-                <div class="text-center relative">
-                    ${generateDonutChartSVG(pieData, "Total", formatIDR(totalVal).replace('Rp', ''))}
-                    <div class="mt-4 grid grid-cols-2 gap-2 text-left">
-                        ${pieData.map(d => `
-                            <div class="flex items-center text-xs text-slate-600">
-                                <span class="w-2 h-2 rounded-full mr-2" style="background:${d.color}"></span>
-                                <span class="flex-1 truncate font-medium">${d.label}</span>
-                                <span class="font-bold">${((d.value / totalVal) * 100).toFixed(1)}%</span>
-                            </div>
-                        `).join('')}
-                    </div>
-                </div>
-            `;
-
-            let alertHTML = '';
-            if(AppState.pendingGR.length > 0) {
-                alertHTML = `
-                <div class="mb-10 bg-slate-900 rounded-2xl p-2 shadow-xl animate-in slide-in-from-top">
-                    <div class="bg-red-500/10 border border-red-500/50 rounded-xl p-6">
-                        <div class="flex items-center mb-4"><div class="bg-red-500 p-2 rounded-lg mr-4"><i data-lucide="alert-triangle" class="text-white w-6 h-6"></i></div><div><h3 class="text-xl font-bold text-white">Action Required: Overdue Goods Receipt</h3><p class="text-red-300 text-sm">Shipments older than 30 days pending confirmation.</p></div></div>
-                        <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-                            ${AppState.pendingGR.map(i => `<div class="bg-red-500/20 p-3 rounded-lg border border-red-500/30 flex justify-between items-center"><div><div class="font-bold text-white text-sm">${i.project}</div><div class="text-xs text-red-200">STO: ${i.sto}</div></div><div class="text-right"><div class="font-bold text-red-400 text-lg">${i.days} Days</div><div class="text-[10px] text-red-300">Since ${i.date}</div></div></div>`).join('')}
-                            <div class="col-span-full text-center mt-2 font-bold text-white">"Please complete Goods Receipt immediately before requesting new items."</div>
-                        </div>
-                    </div>
-                </div>`;
-            }
-
-            // Calculate total for Card
-            const totalYTDValue = data.reduce((acc, curr) => acc + curr.ytd.value, 0);
-
-            return `
-            <div class="min-h-screen pt-24 pb-12 bg-slate-950 text-white animate-in">
-                <div class="max-w-7xl mx-auto px-4">
-                    <div class="mb-8">
-                        <button onclick="window.nav('home')" class="mb-6 flex items-center text-slate-400 hover:text-orange-400 text-sm font-medium uppercase"><i data-lucide="arrow-left" class="w-4 h-4 mr-2"></i> Back to Home</button>
-                        
-                        <!-- NEW TOTAL CARD -->
-                        <div class="bg-gradient-to-r from-slate-900 to-slate-800 border border-slate-700 rounded-2xl p-8 shadow-2xl relative overflow-hidden group">
-                            <div class="absolute top-0 right-0 w-64 h-64 bg-orange-500 opacity-10 rounded-full -mr-16 -mt-16 blur-3xl group-hover:opacity-20 transition-opacity duration-500"></div>
-                            <div class="relative z-10">
-                                <div class="flex items-center justify-between">
-                                    <div>
-                                        <p class="text-sm text-orange-400 font-bold uppercase tracking-wider mb-1 flex items-center"><i data-lucide="trending-up" class="w-4 h-4 mr-2"></i> Total Inventory Utilization (YTD)</p>
-                                        <h2 class="text-4xl md:text-6xl font-extrabold text-white tracking-tight">${formatIDR(totalYTDValue)}</h2>
-                                    </div>
-                                    <div class="hidden md:block bg-slate-800 p-4 rounded-xl border border-slate-700 shadow-lg">
-                                        <i data-lucide="wallet" class="w-12 h-12 text-orange-500"></i>
-                                    </div>
-                                </div>
-                                <div class="mt-4 flex items-center space-x-4 text-sm text-slate-400">
-                                    <span class="bg-green-500/20 text-green-400 px-2 py-1 rounded flex items-center"><i data-lucide="arrow-up-right" class="w-3 h-3 mr-1"></i> Live Data</span>
-                                    <span>Updated from Control Tower</span>
-                                </div>
-                            </div>
-                        </div>
-                    </div>
-
-                    ${alertHTML}
-
-                    <div class="bg-slate-900/80 border border-slate-800 rounded-2xl p-2 mb-8 flex flex-col md:flex-row justify-between items-center gap-4">
-                        <div class="flex space-x-2">
-                            <button onclick="window.setReportView('YTD')" class="px-6 py-2 rounded-lg text-sm font-bold transition-all ${view==='YTD'?'bg-orange-500 text-white shadow-lg':'text-slate-400 hover:bg-slate-800'}">YTD</button>
-                            <button onclick="window.setReportView('Monthly')" class="px-6 py-2 rounded-lg text-sm font-bold transition-all ${view==='Monthly'?'bg-orange-500 text-white shadow-lg':'text-slate-400 hover:bg-slate-800'}">Monthly</button>
-                            <button onclick="window.setReportView('Weekly')" class="px-6 py-2 rounded-lg text-sm font-bold transition-all ${view==='Weekly'?'bg-orange-500 text-white shadow-lg':'text-slate-400 hover:bg-slate-800'}">Weekly</button>
-                        </div>
-                        ${view==='Weekly'?`<div class="flex items-center space-x-2 pr-4"><span class="text-xs text-slate-400 font-bold uppercase">Week:</span>${[1,2,3,4,5].map(w=>`<button onclick="window.setWeek(${w})" class="w-8 h-8 rounded-full text-xs font-bold transition-all ${week===w?'bg-blue-600 text-white':'bg-slate-800 text-slate-400'}">${w}</button>`).join('')}</div>`:''}
-                    </div>
-
-                    <div class="grid grid-cols-1 lg:grid-cols-3 gap-8">
-                        <!-- Data Table (Left) -->
-                        <div class="lg:col-span-2 bg-white rounded-2xl shadow-xl overflow-hidden border border-slate-200">
-                             <div class="p-6 bg-slate-50 border-b border-slate-200 flex justify-between items-center"><h3 class="text-lg font-bold text-slate-800 flex items-center"><i data-lucide="bar-chart-3" class="w-5 h-5 mr-2 text-orange-600"></i> Data Table (${view})</h3></div>
-                             <div class="overflow-x-auto"><table class="w-full text-left text-sm text-slate-900"><thead class="bg-slate-800 text-slate-200 font-bold uppercase text-xs"><tr><th class="p-4">Site</th>${view==='Weekly'?'<th class="p-4 text-right">Non SOH</th><th class="p-4 text-right">STO</th><th class="p-4 text-right">TF</th>':''}<th class="p-4 text-right">Value</th><th class="p-4 text-center">%</th></tr></thead><tbody class="divide-y divide-slate-100">
-                                ${data.map(row => {
-                                    let v = view === 'YTD' ? row.ytd.value : (view === 'Monthly' ? row.monthly.value : row.monthly.weeks[week].total);
-                                    let p = totalVal > 0 ? (v / totalVal) * 100 : 0;
-                                    return `<tr class="hover:bg-slate-50"><td class="p-4 font-bold text-slate-700">${row.name}</td>${view==='Weekly'?`<td class="p-4 text-right font-mono text-xs">${formatIDR(row.monthly.weeks[week].components.nonSoh)}</td><td class="p-4 text-right font-mono text-xs">${formatIDR(row.monthly.weeks[week].components.sto)}</td><td class="p-4 text-right font-mono text-xs">${formatIDR(row.monthly.weeks[week].components.tf)}</td>`:''}<td class="p-4 text-right font-mono font-bold">${formatIDR(v)}</td><td class="p-4 text-center text-xs font-bold text-slate-500">${p.toFixed(1)}%</td></tr>`;
-                                }).join('')}
-                             </tbody></table></div>
-                             ${view === 'Weekly' ? '<div class="p-4 bg-blue-50 border-t border-blue-100 text-xs text-blue-700 flex items-center justify-center"><i data-lucide="alert-circle" class="w-4 h-4 mr-2"></i> Weekly Breakdown: Non SOH, STO, TF POST</div>' : ''}
-                        </div>
-                        
-                        <!-- Visual Analysis (Right Column Stack) -->
-                        <div class="space-y-8">
-                            <!-- NEW PIE CHART CARD -->
-                            <div class="bg-white rounded-2xl shadow-xl overflow-hidden border border-slate-200 h-fit">
-                                <div class="p-6 bg-slate-50 border-b border-slate-200"><h3 class="text-lg font-bold text-slate-800 flex items-center"><i data-lucide="pie-chart" class="w-5 h-5 mr-2 text-blue-600"></i> Site Distribution (%)</h3></div>
-                                <div class="p-8 flex flex-col items-center justify-center">${pieChartHTML}</div>
-                            </div>
-
-                            <!-- EXISTING BAR CHART CARD -->
-                            <div class="bg-white rounded-2xl shadow-xl overflow-hidden border border-slate-200 h-fit">
-                                <div class="p-6 bg-slate-50 border-b border-slate-200"><h3 class="text-lg font-bold text-slate-800 flex items-center"><i data-lucide="bar-chart-2" class="w-5 h-5 mr-2 text-orange-600"></i> Comparative Analysis</h3></div>
-                                <div class="p-8 flex flex-col items-center justify-center">${barChartHTML}</div>
-                            </div>
-                        </div>
-                    </div>
-                </div>
-            </div>`;
-        }
-
-        // --- CATALOG MODULE ---
-        function renderCatalog() {
-            const plantOptions = Array.from({length: 28}, (_, i) => `<option value="PL${String(i + 1).padStart(2, '0')}">PL${String(i + 1).padStart(2, '0')}</option>`).join('');
-            const storageLocOptions = Array.from({length: 15}, (_, i) => `<option value="S${String(i + 1).padStart(3, '0')}">S${String(i + 1).padStart(3, '0')}</option>`).join('');
-            const mtOpts = ["SPRT","FOGC","TIRE","CONS","GENS","ASET","SEJA","MDLE","BOMM","FFF"].map(c=>`<option value="${c}">${c}</option>`).join('');
-            
-            // Full Lists from previous context
-            const matGroups = ["S001", "S002", "S003", "S004", "S005", "S006", "F001", "F002", "F003", "F004", "T001", "G001", "G002", "C001", "C002", "C003", "C004", "C005", "C006", "C007", "A001", "A002", "A003", "A004", "A005", "A006", "J001", "J002", "J003", "J004", "J005", "J006", "J007", "J008", "J009", "J010", "J011", "J012", "J013", "J014", "J015", "M001"].map(c=>`<option value="${c}">${c}</option>`).join('');
-            const purchGroups = ["G01", "G02", "G03", "G04", "G05", "G06", "G07"].map(c=>`<option value="${c}">${c}</option>`).join('');
-            const valClasses = ["V001", "V002", "V003", "V004", "V005", "V006", "V007", "V008", "V009", "V010", "V011", "V012", "V013", "V014", "V015", "V016", "V017", "V018", "V019", "V020", "V021", "V022", "V023", "V024", "V025", "V026", "V027", "V028", "V029", "V030", "V031", "V032", "V033", "V034", "V035"].map(c=>`<option value="${c}">${c}</option>`).join('');
-            const lockedClass = AppState.isCatalogLocked ? "bg-slate-100 text-slate-400 cursor-not-allowed border-slate-200 master-data-field" : "";
-            const disabledAttr = AppState.isCatalogLocked ? "disabled" : "";
-
-            return `<div class="min-h-screen pt-24 pb-12 bg-slate-50 text-slate-900 animate-in"><div class="max-w-6xl mx-auto px-4"><button onclick="window.nav('home')" class="mb-6 flex items-center text-slate-500 hover:text-orange-600 font-medium text-sm"><i data-lucide="arrow-left" class="w-4 h-4 mr-2"></i> Back to Home</button><div class="bg-white rounded-xl shadow-xl overflow-hidden border border-slate-200"><div class="bg-slate-900 p-8 text-white"><h2 class="text-3xl font-bold mb-2 flex items-center"><i data-lucide="file-text" class="mr-3 text-orange-500"></i> New Material Request</h2><p class="text-slate-400">Formulir registrasi Master Data Material baru.</p></div><div class="p-8"><div class="bg-orange-50 border border-orange-200 rounded-lg p-6 mb-8"><div class="flex justify-between items-start"><div><h4 class="font-bold text-orange-800 mb-2 flex items-center"><i data-lucide="shield-check" class="w-5 h-5 mr-2"></i> Duplicate Check (ZERPD)</h4><p class="text-sm text-orange-700 mb-4">Upload file <strong>ZERPD.xlsx</strong> (Format: [Tanggal] ZERPD ALL SITE) untuk membuka formulir.</p></div>${AppState.isZerpdUploaded ? `<button onclick="window.deleteZerpdFile()" class="text-red-500 hover:text-red-700 flex items-center text-sm font-bold"><i data-lucide="trash-2" class="w-4 h-4 mr-1"></i> Remove File</button>` : ''}</div>${!AppState.isZerpdUploaded ? `<input type="file" accept=".xlsx" onchange="window.handleZerpdUpload(this)" class="block w-full text-sm text-slate-500 file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-sm file:font-semibold file:bg-orange-500 file:text-white hover:file:bg-orange-600"/>` : `<div class="text-sm font-bold text-green-600">ZERPD File Loaded. Ready to verify.</div>`}<div id="zerpdStatus" class="text-sm font-bold text-slate-400 mt-2">Waiting for file...</div></div><form onsubmit="window.handleCatalogSubmit(event)" class="space-y-8"><div class="bg-slate-50 p-6 rounded-lg border border-slate-200"><h4 class="font-bold text-slate-800 mb-4 pb-2 border-b border-slate-300 flex items-center"><i data-lucide="user" class="w-4 h-4 mr-2 text-orange-500"></i> Requester Information</h4><div class="grid grid-cols-1 md:grid-cols-2 gap-6"><div><label class="block text-xs font-bold text-slate-500 uppercase mb-1">Requester Name</label><input required name="requester_name" type="text" class="w-full px-3 py-2 border border-slate-300 rounded focus:ring-2 focus:ring-orange-500 outline-none"></div><div><label class="block text-xs font-bold text-slate-500 uppercase mb-1">Department</label><input required name="department" type="text" class="w-full px-3 py-2 border border-slate-300 rounded focus:ring-2 focus:ring-orange-500 outline-none"></div></div></div><div class="bg-blue-50 p-6 rounded-lg border border-blue-200"><h4 class="font-bold text-blue-900 mb-4 pb-2 border-b border-blue-300 flex items-center"><i data-lucide="search" class="w-4 h-4 mr-2"></i> Part Number Verification</h4><div class="grid grid-cols-1 md:grid-cols-2 gap-4"><div class="relative"><label class="block text-xs font-bold text-slate-500 uppercase mb-1">Manufacturing Part Number</label><div class="flex gap-2"><input id="inputMPN" name="manuf_part_number" disabled type="text" class="w-full px-3 py-2 border border-slate-300 rounded focus:ring-2 focus:ring-blue-500 outline-none ${!AppState.isZerpdUploaded?'bg-slate-100 cursor-not-allowed':''}" placeholder="Upload ZERPD first..."><button type="button" onclick="window.checkPartNumber()" ${!AppState.isZerpdUploaded ? 'disabled' : ''} class="bg-blue-600 text-white px-6 py-2 rounded text-xs font-bold hover:bg-blue-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed" id="btnVerifyMPN" disabled>VERIFY</button></div></div><div class="flex items-center"><p id="mpnStatus" class="text-sm font-bold ml-2"></p></div><div class="md:col-span-2 hidden" id="duplicateWarning"><div class="bg-red-100 border-l-4 border-red-500 text-red-700 p-4 rounded shadow-sm"><div class="flex items-start"><i data-lucide="alert-triangle" class="w-5 h-5 mr-2 mt-0.5"></i><div><p class="font-bold">Mohon pastikan kembali PN dikarenakan PN sdh terdaftar di ZERPD</p><p class="text-sm mt-1">Existing Match: <span id="existingMPNDisplay" class="font-mono bg-red-200 px-1 rounded"></span> (Material: <span id="existingMatDisplay" class="font-mono"></span>)</p></div></div></div></div></div></div><div><h4 class="font-bold text-slate-800 mb-4 flex items-center"><i data-lucide="box" class="w-4 h-4 mr-2 text-orange-500"></i> 1. Basic Material Data</h4><div class="grid grid-cols-1 md:grid-cols-3 gap-4"><div class="md:col-span-3"><label class="block text-xs font-bold text-slate-500 uppercase mb-1">Description</label><input required ${disabledAttr} name="description" type="text" class="w-full px-3 py-2 border border-slate-300 rounded outline-none ${lockedClass}" placeholder="Material Description"></div><div><label class="block text-xs font-bold text-slate-500 uppercase mb-1">Old Material</label><input ${disabledAttr} name="old_material" type="text" class="w-full px-3 py-2 border border-slate-300 rounded outline-none ${lockedClass}"></div><div><label class="block text-xs font-bold text-slate-500 uppercase mb-1">Type</label><select ${disabledAttr} name="mat_type" class="w-full px-3 py-2 border border-slate-300 rounded outline-none ${lockedClass}"><option value="">Select...</option>${mtOpts}</select></div><div><label class="block text-xs font-bold text-slate-500 uppercase mb-1">Group</label><select ${disabledAttr} name="mat_group" class="w-full px-3 py-2 border border-slate-300 rounded outline-none ${lockedClass}"><option value="">Select...</option>${matGroups}</select></div><div><label class="block text-xs font-bold text-slate-500 uppercase mb-1">Plant</label><select required ${disabledAttr} name="plant" class="w-full px-3 py-2 border border-slate-300 rounded outline-none ${lockedClass}"><option value="">Select...</option>${plantOptions}</select></div><div><label class="block text-xs font-bold text-slate-500 uppercase mb-1">Base UoM</label><input ${disabledAttr} name="base_uom" class="w-full px-3 py-2 border border-slate-300 rounded outline-none ${lockedClass}"></div></div></div><div><h4 class="font-bold text-slate-800 mb-4 flex items-center"><i data-lucide="settings" class="w-4 h-4 mr-2 text-orange-500"></i> 2. Mfg & Purchasing</h4><div class="grid grid-cols-1 md:grid-cols-3 gap-4"><div><label class="block text-xs font-bold text-slate-500 uppercase mb-1">Part Profile</label><input ${disabledAttr} name="manuf_profile" class="w-full px-3 py-2 border border-slate-300 rounded outline-none ${lockedClass}"></div><div><label class="block text-xs font-bold text-slate-500 uppercase mb-1">Purch Group</label><select ${disabledAttr} name="purch_group" class="w-full px-3 py-2 border border-slate-300 rounded outline-none ${lockedClass}"><option value="">Select...</option>${purchGroups}</select></div><div><label class="block text-xs font-bold text-slate-500 uppercase mb-1">Auto PO</label><select ${disabledAttr} name="auto_po" class="w-full px-3 py-2 border border-slate-300 rounded outline-none ${lockedClass}"><option>Yes</option><option>No</option></select></div></div></div><div><h4 class="font-bold text-slate-800 mb-4 flex items-center"><i data-lucide="bar-chart-2" class="w-4 h-4 mr-2 text-orange-500"></i> 3. MRP</h4><div class="grid grid-cols-1 md:grid-cols-4 gap-4"><div><label class="block text-xs font-bold text-slate-500 uppercase mb-1">MRP Type</label><input ${disabledAttr} value="ND" class="w-full px-3 py-2 border border-slate-300 rounded outline-none ${lockedClass}" readonly></div><div><label class="block text-xs font-bold text-slate-500 uppercase mb-1">Controller</label><input ${disabledAttr} value="M01" class="w-full px-3 py-2 border border-slate-300 rounded outline-none ${lockedClass}" readonly></div><div><label class="block text-xs font-bold text-slate-500 uppercase mb-1">Reorder</label><input ${disabledAttr} value="0" class="w-full px-3 py-2 border border-slate-300 rounded outline-none ${lockedClass}" readonly></div><div><label class="block text-xs font-bold text-slate-500 uppercase mb-1">Lot Size</label><input ${disabledAttr} name="lot" class="w-full px-3 py-2 border border-slate-300 rounded outline-none ${lockedClass}"></div></div></div><div><h4 class="font-bold text-slate-800 mb-4 flex items-center"><i data-lucide="warehouse" class="w-4 h-4 mr-2 text-orange-500"></i> 4. Storage</h4><div class="grid grid-cols-1 md:grid-cols-3 gap-4"><div><label class="block text-xs font-bold text-slate-500 uppercase mb-1">Valuation Class</label><select ${disabledAttr} name="val_class" class="w-full px-3 py-2 border border-slate-300 rounded outline-none ${lockedClass}"><option value="">Select...</option>${valClasses}</select></div><div><label class="block text-xs font-bold text-slate-500 uppercase mb-1">Storage Loc</label><select ${disabledAttr} name="sloc" class="w-full px-3 py-2 border border-slate-300 rounded outline-none ${lockedClass}"><option value="">Select...</option>${storageLocOptions}</select></div><div><label class="block text-xs font-bold text-slate-500 uppercase mb-1">Bin</label><input ${disabledAttr} name="bin" class="w-full px-3 py-2 border border-slate-300 rounded outline-none ${lockedClass}"></div></div></div><div class="pt-6 border-t border-slate-200"><button type="submit" ${disabledAttr} class="w-full bg-orange-500 hover:bg-orange-600 text-white font-bold py-4 rounded-md shadow-lg flex justify-center items-center text-lg disabled:bg-slate-300 disabled:shadow-none disabled:cursor-not-allowed">${AppState.isCatalogLocked ? `<i data-lucide="lock" class="w-5 h-5 mr-2"></i> Verify MPN to Unlock` : `<i data-lucide="send" class="w-5 h-5 mr-2"></i> Submit Request`}</button></div></form></div></div></div></div>`;
-        }
-
         function renderAnalysisLanding() {
             return `<div class="min-h-screen pt-24 pb-12 bg-slate-900 text-white animate-in"><div class="max-w-7xl mx-auto px-4 text-center mb-12"><h2 class="text-4xl font-extrabold mb-4">Analysis Tools</h2><button onclick="window.nav('home')" class="text-orange-500 hover:text-orange-400">Back to Home</button></div><div class="max-w-7xl mx-auto px-4 grid grid-cols-1 md:grid-cols-3 gap-8"><div onclick="window.open('https://fff-class.vercel.app/', '_blank')" class="bg-slate-800 rounded-2xl p-8 border border-slate-700 hover:border-orange-500 cursor-pointer group relative overflow-hidden"><div class="absolute top-0 right-0 w-32 h-32 bg-orange-500 opacity-10 rounded-bl-full -mr-8 -mt-8"></div><div class="w-16 h-16 bg-orange-500 rounded-2xl flex items-center justify-center mb-6"><i data-lucide="git-merge" class="text-white w-8 h-8"></i></div><h3 class="text-xl font-bold mb-3">FFF Class Analysis</h3><span class="text-xs font-bold uppercase text-slate-500 group-hover:text-white flex items-center">Launch Tool <i data-lucide="arrow-right" class="ml-2 w-4 h-4"></i></span></div><div onclick="window.open('https://analisis-pr-oustanding-dc-palaran.vercel.app/', '_blank')" class="bg-slate-800 rounded-2xl p-8 border border-slate-700 hover:border-blue-500 cursor-pointer group relative overflow-hidden"><div class="absolute top-0 right-0 w-32 h-32 bg-blue-600 opacity-10 rounded-bl-full -mr-8 -mt-8"></div><div class="w-16 h-16 bg-blue-600 rounded-2xl flex items-center justify-center mb-6"><i data-lucide="bar-chart-3" class="text-white w-8 h-8"></i></div><h3 class="text-xl font-bold mb-3">PR OS Analysis</h3><span class="text-xs font-bold uppercase text-slate-500 group-hover:text-white flex items-center">Launch Tool <i data-lucide="arrow-right" class="ml-2 w-4 h-4"></i></span></div><div onclick="window.open('https://block-master-dc-palaran.vercel.app/', '_blank')" class="bg-slate-800 rounded-2xl p-8 border border-slate-700 hover:border-slate-500 cursor-pointer group relative overflow-hidden"><div class="absolute top-0 right-0 w-32 h-32 bg-slate-600 opacity-10 rounded-bl-full -mr-8 -mt-8"></div><div class="w-16 h-16 bg-slate-600 rounded-2xl flex items-center justify-center mb-6"><i data-lucide="alert-triangle" class="text-white w-8 h-8"></i></div><h3 class="text-xl font-bold mb-3">Block Master</h3><span class="text-xs font-bold uppercase text-slate-500 group-hover:text-white flex items-center">Launch Tool <i data-lucide="arrow-right" class="ml-2 w-4 h-4"></i></span></div></div></div>`;
         }
 
-        // --- RENDER MAIN ---
+        // --- RENDER MAIN (DEFINED BEFORE WINDOW FUNCS) ---
         function render() {
             const root = document.getElementById('app-root');
             root.innerHTML = '';
@@ -739,9 +391,18 @@
                 root.insertAdjacentHTML('beforeend', renderTrackingSection());
                 root.insertAdjacentHTML('beforeend', renderContact());
                 root.insertAdjacentHTML('beforeend', renderFooter());
-                setTimeout(fetchDashboardData, 100);
+                // Only call fetch if needed, and don't recursively call render if data hasn't changed.
+                // For simplicity, we just check if we have data to avoid re-fetch on every render, 
+                // OR we let the fetch function handle UI updates selectively.
+                if (AppState.pendingGR.length === 0) {
+                     fetchDashboardData();
+                }
             } else if (AppState.currentView === 'dashboard') {
                 root.insertAdjacentHTML('beforeend', renderDashboard());
+                // Always ensure data is fresh when viewing dashboard
+                if (AppState.dashboardData.length === 0) {
+                    fetchDashboardData();
+                }
             } else if (AppState.currentView === 'catalog') {
                 root.insertAdjacentHTML('beforeend', renderCatalog());
             } else if (AppState.currentView === 'analysis') {
@@ -749,38 +410,222 @@
             }
             renderIcons();
 
-            // Re-init state check for catalog
             if (AppState.currentView === 'catalog' && AppState.isZerpdUploaded) {
                const inputMPN = document.getElementById('inputMPN');
-               if (inputMPN) {
-                   inputMPN.disabled = false;
-                   inputMPN.classList.remove('bg-slate-100', 'cursor-not-allowed');
-               }
-               
+               if (inputMPN) { inputMPN.disabled = false; inputMPN.classList.remove('bg-slate-100', 'cursor-not-allowed'); }
                const btnVerify = document.getElementById('btnVerifyMPN');
-               if (btnVerify) {
-                   btnVerify.disabled = false;
-                   btnVerify.classList.remove('opacity-50', 'cursor-not-allowed');
-               }
-
+               if (btnVerify) { btnVerify.disabled = false; btnVerify.classList.remove('opacity-50', 'cursor-not-allowed'); }
                const delBtn = document.getElementById('deleteZerpdBtn');
                if(delBtn) delBtn.classList.remove('hidden');
-               
                const stat = document.getElementById('zerpdStatus');
-               if(stat) {
-                   stat.textContent = "ZERPD File Loaded. Ready.";
-                   stat.className = "text-sm font-bold text-green-600";
-               }
-               
+               if(stat) { stat.textContent = "ZERPD File Loaded. Ready."; stat.className = "text-sm font-bold text-green-600"; }
                const upContainer = document.getElementById('zerpdUploadContainer');
                if(upContainer) upContainer.classList.add('hidden');
             }
         }
+        
+        function renderDashboard() {
+            if (AppState.dashboardData.length === 0) AppState.dashboardData = generateReportData();
+            
+            const data = AppState.dashboardData;
+            const view = AppState.reportView;
+            const week = AppState.selectedWeek;
+            const selectedMonth = AppState.selectedMonth;
+            
+            let currentData = [];
+            let currentTotal = 0;
+            let cardTitle = "";
+            let subText = "";
+            let colName = "";
+            let showBackButton = false;
 
-        // --- Initialization ---
-        if(isFirebaseAvailable && auth) {
-            onAuthStateChanged(auth, (u) => currentUser = u);
-            signInAnonymously(auth).catch(err => console.warn("Auto-login skipped:", err));
+            if (view === 'YTD') {
+                currentData = data;
+                currentTotal = data.reduce((a, b) => a + b.ytd.value, 0);
+                cardTitle = "Total Inventory Utilization (YTD)";
+                subText = "Accumulated Value Year-to-Date";
+                colName = "Site";
+            } else if (view === 'Monthly') {
+                if (selectedMonth) {
+                    const monthData = AppState.monthlyBreakdown.find(m => m.name === selectedMonth);
+                    currentData = monthData ? monthData.sites : [];
+                    currentTotal = monthData ? monthData.value : 0;
+                    cardTitle = `Utilization Breakdown: ${selectedMonth}`;
+                    subText = "Detailed Site Contribution";
+                    colName = "Site";
+                    showBackButton = true;
+                } else {
+                    currentData = AppState.monthlyBreakdown;
+                    currentTotal = currentData.reduce((a, b) => a + b.value, 0);
+                    cardTitle = "Total Utilization (Monthly Breakdown)";
+                    subText = "Actual Value Aggregated by Month";
+                    colName = "Month";
+                }
+            } else {
+                currentData = data; 
+                currentTotal = data.reduce((a, b) => a + b.monthly.weeks[week].total, 0);
+                cardTitle = `Total Inventory Utilization (Week ${week})`;
+                subText = "Weekly Breakdown";
+                colName = "Site";
+            }
+
+            let topContentHTML = '';
+            if (view === 'Monthly' && !selectedMonth) {
+                topContentHTML = `
+                <div class="mb-8">
+                    <h2 class="text-2xl font-bold text-white mb-4 flex items-center"><i data-lucide="calendar" class="w-6 h-6 mr-2 text-orange-500"></i> Monthly Performance Breakdown</h2>
+                    <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+                        ${currentData.map((item, index) => {
+                            const gradients = ["from-blue-600 to-indigo-700", "from-emerald-500 to-teal-700", "from-orange-500 to-red-600", "from-purple-500 to-pink-600", "from-cyan-500 to-blue-600", "from-slate-600 to-slate-800"];
+                            const grad = gradients[index % gradients.length];
+                            return `
+                            <div onclick="window.setMonth('${item.name}')" class="relative bg-white rounded-2xl shadow-xl overflow-hidden group hover:-translate-y-1 transition-all duration-300 border border-slate-200 cursor-pointer">
+                                <div class="absolute top-0 right-0 w-24 h-24 bg-gradient-to-br ${grad} opacity-10 rounded-bl-full group-hover:opacity-20 transition-opacity"></div>
+                                <div class="p-6 relative z-10">
+                                    <div class="flex justify-between items-start mb-4">
+                                        <div class="p-3 rounded-xl bg-gradient-to-br ${grad} text-white shadow-lg"><i data-lucide="bar-chart-2" class="w-5 h-5"></i></div>
+                                        <div class="text-right"><span class="text-xs font-bold px-2 py-1 rounded-full bg-slate-100 text-slate-500 border border-slate-200">${item.percentage.toFixed(1)}%</span></div>
+                                    </div>
+                                    <h3 class="text-sm font-bold text-slate-500 uppercase tracking-wider mb-1">${item.name}</h3>
+                                    <p class="text-2xl font-extrabold text-slate-900 tracking-tight">${formatIDR(item.value)}</p>
+                                    <p class="text-xs text-blue-500 mt-2 font-semibold">Click to view details &rarr;</p>
+                                </div>
+                                <div class="h-1 w-full bg-gradient-to-r ${grad}"></div>
+                            </div>`;
+                        }).join('')}
+                    </div>
+                </div>`;
+            } else {
+                topContentHTML = `
+                <div class="mb-8">
+                    <div class="bg-gradient-to-r from-slate-900 to-slate-800 border border-slate-700 rounded-2xl p-8 shadow-2xl relative overflow-hidden group">
+                        <div class="absolute top-0 right-0 w-64 h-64 bg-orange-500 opacity-10 rounded-full -mr-16 -mt-16 blur-3xl group-hover:opacity-20 transition-opacity duration-500"></div>
+                        <div class="relative z-10">
+                            <div class="flex items-center justify-between">
+                                <div>
+                                    <p class="text-sm text-orange-400 font-bold uppercase tracking-wider mb-1 flex items-center"><i data-lucide="trending-up" class="w-4 h-4 mr-2"></i> ${cardTitle}</p>
+                                    <h2 class="text-4xl md:text-6xl font-extrabold text-white tracking-tight">${formatIDR(currentTotal)}</h2>
+                                </div>
+                                <div class="hidden md:block bg-slate-800 p-4 rounded-xl border border-slate-700 shadow-lg"><i data-lucide="wallet" class="w-12 h-12 text-orange-500"></i></div>
+                            </div>
+                            <div class="mt-4 flex items-center space-x-4 text-sm text-slate-400">
+                                <span class="bg-green-500/20 text-green-400 px-2 py-1 rounded flex items-center"><i data-lucide="arrow-up-right" class="w-3 h-3 mr-1"></i> Live Data</span>
+                                <span>${subText}</span>
+                            </div>
+                        </div>
+                    </div>
+                </div>`;
+            }
+
+            const palette = ['#f97316', '#3b82f6', '#10b981', '#a855f7', '#ec4899', '#64748b', '#eab308', '#ef4444'];
+            const pieData = currentData.map((item, idx) => {
+                let val = 0;
+                if(view === 'YTD') val = item.ytd.value;
+                else if(view === 'Monthly' && !selectedMonth) val = item.value;
+                else if(view === 'Monthly' && selectedMonth) val = item.value;
+                else val = item.monthly.weeks[week].total;
+                return { value: val, color: palette[idx % palette.length], label: item.name };
+            }).sort((a,b) => b.value - a.value);
+
+            const pieChartHTML = `
+                <div class="text-center relative">
+                    ${generateDonutChartSVG(pieData, "Total", formatIDR(currentTotal).replace('Rp', ''))}
+                    <div class="mt-4 grid grid-cols-2 gap-2 text-left max-h-48 overflow-y-auto">
+                        ${pieData.map(d => `<div class="flex items-center text-xs text-slate-600"><span class="w-2 h-2 rounded-full mr-2" style="background:${d.color}"></span><span class="flex-1 truncate font-medium">${d.label}</span><span class="font-bold">${((d.value / currentTotal) * 100).toFixed(1)}%</span></div>`).join('')}
+                    </div>
+                </div>
+            `;
+
+            let barChartHTML = `<div class="space-y-3 max-h-60 overflow-y-auto">${currentData.map((item, idx) => {
+                let v = 0;
+                if(view === 'YTD') v = item.ytd.value;
+                else if(view === 'Monthly' && !selectedMonth) v = item.value;
+                else if(view === 'Monthly' && selectedMonth) v = item.value;
+                else v = item.monthly.weeks[week].total;
+                
+                const maxVal = Math.max(...currentData.map(d => {
+                   if(view === 'YTD') return d.ytd.value;
+                   if(view === 'Monthly' && !selectedMonth) return d.value;
+                   if(view === 'Monthly' && selectedMonth) return d.value;
+                   return d.monthly.weeks[week].total;
+                }));
+                
+                return `<div><div class="flex justify-between text-xs font-bold mb-1 text-slate-600"><span>${item.name}</span><span>${formatIDR(v)}</span></div><div class="w-full bg-slate-200 rounded-full h-3 overflow-hidden"><div class="h-full rounded-full bg-gradient-to-r from-orange-400 to-orange-600" style="width:${(v/maxVal)*100}%"></div></div></div>`;
+            }).join('')}</div>`;
+
+            let alertHTML = '';
+            if(AppState.pendingGR.length > 0) {
+                alertHTML = `
+                <div class="mb-10 bg-slate-900 rounded-2xl p-2 shadow-xl animate-in slide-in-from-top">
+                    <div class="bg-red-500/10 border border-red-500/50 rounded-xl p-6">
+                        <div class="flex items-center mb-4"><div class="bg-red-500 p-2 rounded-lg mr-4"><i data-lucide="alert-triangle" class="text-white w-6 h-6"></i></div><div><h3 class="text-xl font-bold text-white">Action Required: Overdue Goods Receipt</h3><p class="text-red-300 text-sm">Shipments older than 30 days pending confirmation.</p></div></div>
+                        <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">${AppState.pendingGR.map(i => `<div class="bg-red-500/20 p-3 rounded-lg border border-red-500/30 flex justify-between items-center"><div><div class="font-bold text-white text-sm">${i.project}</div><div class="text-xs text-red-200">STO: ${i.sto}</div></div><div class="text-right"><div class="font-bold text-red-400 text-lg">${i.days} Days</div><div class="text-[10px] text-red-300">Since ${i.date}</div></div></div>`).join('')}<div class="col-span-full text-center mt-2 font-bold text-white">"Please complete Goods Receipt immediately before requesting new items."</div></div>
+                    </div>
+                </div>`;
+            }
+
+            return `
+            <div class="min-h-screen pt-24 pb-12 bg-slate-950 text-white animate-in">
+                <div class="max-w-7xl mx-auto px-4">
+                    <button onclick="window.nav('home')" class="mb-6 flex items-center text-slate-400 hover:text-orange-400 text-sm font-medium uppercase"><i data-lucide="arrow-left" class="w-4 h-4 mr-2"></i> Back to Home</button>
+                    ${topContentHTML}
+                    ${alertHTML}
+                    <div class="bg-slate-900/80 border border-slate-800 rounded-2xl p-2 mb-8 flex flex-col md:flex-row justify-between items-center gap-4">
+                        <div class="flex space-x-2">
+                            <button onclick="window.setReportView('YTD')" class="px-6 py-2 rounded-lg text-sm font-bold transition-all ${view==='YTD'?'bg-orange-500 text-white shadow-lg':'text-slate-400 hover:bg-slate-800'}">YTD</button>
+                            <button onclick="window.setReportView('Monthly')" class="px-6 py-2 rounded-lg text-sm font-bold transition-all ${view==='Monthly'?'bg-orange-500 text-white shadow-lg':'text-slate-400 hover:bg-slate-800'}">Monthly</button>
+                            <button onclick="window.setReportView('Weekly')" class="px-6 py-2 rounded-lg text-sm font-bold transition-all ${view==='Weekly'?'bg-orange-500 text-white shadow-lg':'text-slate-400 hover:bg-slate-800'}">Weekly</button>
+                        </div>
+                        ${view==='Weekly'?`<div class="flex items-center space-x-2 pr-4"><span class="text-xs text-slate-400 font-bold uppercase">Week:</span>${[1,2,3,4,5].map(w=>`<button onclick="window.setWeek(${w})" class="w-8 h-8 rounded-full text-xs font-bold transition-all ${week===w?'bg-blue-600 text-white':'bg-slate-800 text-slate-400'}">${w}</button>`).join('')}</div>`:''}
+                    </div>
+
+                    <div class="grid grid-cols-1 lg:grid-cols-3 gap-8">
+                        <!-- Data Table (Left) -->
+                        <div class="lg:col-span-2 bg-white rounded-2xl shadow-xl overflow-hidden border border-slate-200">
+                             <div class="p-6 bg-slate-50 border-b border-slate-200 flex justify-between items-center">
+                                <h3 class="text-lg font-bold text-slate-800 flex items-center">
+                                    <i data-lucide="bar-chart-3" class="w-5 h-5 mr-2 text-orange-600"></i> 
+                                    ${showBackButton ? `Sites in ${selectedMonth}` : `Data Table (${view})`}
+                                </h3>
+                                ${showBackButton ? `<button onclick="window.clearMonth()" class="text-xs bg-slate-200 hover:bg-slate-300 text-slate-700 px-3 py-1 rounded font-bold transition">Back to Months</button>` : ''}
+                             </div>
+                             <div class="overflow-x-auto max-h-[500px] overflow-y-auto"><table class="w-full text-left text-sm text-slate-900"><thead class="bg-slate-800 text-slate-200 font-bold uppercase text-xs sticky top-0 z-10"><tr><th class="p-4">${colName}</th>${view==='Weekly'?'<th class="p-4 text-right">Non SOH</th><th class="p-4 text-right">STO</th><th class="p-4 text-right">TF</th>':''}<th class="p-4 text-right">Value</th><th class="p-4 text-center">%</th></tr></thead><tbody class="divide-y divide-slate-100">
+                                ${currentData.map(row => {
+                                    let v = 0;
+                                    if(view === 'YTD') v = row.ytd.value;
+                                    else if(view === 'Monthly' && !selectedMonth) v = row.value;
+                                    else if(view === 'Monthly' && selectedMonth) v = row.value;
+                                    else v = row.monthly.weeks[week].total;
+                                    
+                                    let p = currentTotal > 0 ? (v / currentTotal) * 100 : 0;
+                                    
+                                    // Row Click Logic for Monthly view
+                                    let rowClass = "hover:bg-slate-50";
+                                    let clickAction = "";
+                                    if (view === 'Monthly' && !selectedMonth) {
+                                        rowClass = "clickable-row";
+                                        clickAction = `onclick="window.setMonth('${row.name}')"`;
+                                    }
+
+                                    return `<tr class="${rowClass}" ${clickAction}><td class="p-4 font-bold text-slate-700">${row.name}</td>${view==='Weekly'?`<td class="p-4 text-right font-mono text-xs">${formatIDR(row.monthly.weeks[week].components.nonSoh)}</td><td class="p-4 text-right font-mono text-xs">${formatIDR(row.monthly.weeks[week].components.sto)}</td><td class="p-4 text-right font-mono text-xs">${formatIDR(row.monthly.weeks[week].components.tf)}</td>`:''}<td class="p-4 text-right font-mono font-bold">${formatIDR(v)}</td><td class="p-4 text-center text-xs font-bold text-slate-500">${p.toFixed(1)}%</td></tr>`;
+                                }).join('')}
+                             </tbody></table></div>
+                        </div>
+                        
+                        <!-- Visual Analysis (Right Column Stack) -->
+                        <div class="space-y-8">
+                            <div class="bg-white rounded-2xl shadow-xl overflow-hidden border border-slate-200 h-fit">
+                                <div class="p-6 bg-slate-50 border-b border-slate-200"><h3 class="text-lg font-bold text-slate-800 flex items-center"><i data-lucide="pie-chart" class="w-5 h-5 mr-2 text-blue-600"></i> ${view} Distribution (%)</h3></div>
+                                <div class="p-8 flex flex-col items-center justify-center">${pieChartHTML}</div>
+                            </div>
+                            <div class="bg-white rounded-2xl shadow-xl overflow-hidden border border-slate-200 h-fit">
+                                <div class="p-6 bg-slate-50 border-b border-slate-200"><h3 class="text-lg font-bold text-slate-800 flex items-center"><i data-lucide="bar-chart-2" class="w-5 h-5 mr-2 text-orange-600"></i> Comparative Analysis</h3></div>
+                                <div class="p-8 flex flex-col items-center justify-center">${barChartHTML}</div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>`;
         }
         
         render();
