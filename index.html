@@ -98,20 +98,25 @@
             }
         };
 
+        // ROBUST CSV PARSER (Handles commas inside quotes correctly)
         const parseCSV = (text) => {
-             const rows = []; let currentRow = [], currentCell = '', inQuotes = false;
-             for (let i = 0; i < text.length; i++) {
-                const char = text[i];
-                if (char === '"' && text[i+1] === '"') { currentCell += '"'; i++; }
-                else if (char === '"') inQuotes = !inQuotes;
-                else if (char === ',' && !inQuotes) { currentRow.push(currentCell.trim()); currentCell = ''; }
-                else if ((char === '\n' || char === '\r') && !inQuotes) {
-                    if (currentCell || currentRow.length) rows.push(currentRow);
-                    currentRow = []; currentCell = '';
-                } else currentCell += char;
-             }
-             if (currentCell || currentRow.length) { currentRow.push(currentCell.trim()); rows.push(currentRow); }
-             return rows;
+            const arr = []; 
+            let quote = false;  // 'true' means we're inside a quoted field
+            let col = 0, row = 0;
+
+            for (let c = 0; c < text.length; c++) {
+                let cc = text[c], nc = text[c+1];        // Current character, next character
+                arr[row] = arr[row] || [];             // Create a new row if necessary
+                arr[row][col] = arr[row][col] || '';   // Create a new column (start with empty string) if necessary
+
+                if (cc == '"' && quote && nc == '"') { arr[row][col] += cc; ++c; }
+                else if (cc == '"') { quote = !quote; }
+                else if (cc == ',' && !quote) { ++col; }
+                else if (cc == '\r' && nc == '\n' && !quote) { ++row; col = 0; ++c; }
+                else if (cc == '\n' && !quote) { ++row; col = 0; }
+                else { arr[row][col] += cc; }
+            }
+            return arr;
         }
 
         const parseDateFlexible = (dateStr) => {
@@ -232,15 +237,18 @@
                     const monthMap = new Map(); 
                     const weekMap = new Map();
                     
-                    const monthsOrder = ["Januari", "Februari", "Maret", "April", "Mei", "Juni", "Juli", "Agustus", "September", "Oktober", "November", "Desember"];
+                    const monthsOrder = ["Mei-Agustus", "Januari", "Februari", "Maret", "April", "Mei", "Juni", "Juli", "Agustus", "September", "Oktober", "November", "Desember"];
 
                     rowsUtil.forEach(row => {
+                        // Check row length safely. If csv parser worked right, row[12] is Col M.
+                        // Col I (8) = Site, Col K (10) = Value, Col B (1) = Date, Col M (12) = Week
                         if(!row[8] || !row[10]) return;
+                        
                         const siteName = row[8].trim();
                         const siteKey = normalizeString(siteName); 
                         let cleanVal = row[10].replace(/[Rp\s.]/g, '').replace(',', '.');
                         const rowValue = parseFloat(cleanVal) || 0;
-                        const dateRaw = row[1]; // Col B
+                        const dateRaw = row[1];
 
                         // 1. Site Aggregation (YTD)
                         if (siteMap.has(siteKey)) {
@@ -252,8 +260,7 @@
                         // 2. Month Resolution
                         let monthName = getMonthName(dateRaw);
                         let dateObj = parseDateFlexible(dateRaw);
-
-                        if (!monthName) monthName = "Mei-Agustus";
+                        if (!monthName || monthName === "Unknown") monthName = "Mei-Agustus";
 
                         // 3. Month Aggregation
                         if (!monthMap.has(monthName)) {
@@ -264,34 +271,43 @@
                         if (monthData.sites.has(siteKey)) monthData.sites.get(siteKey).value += rowValue;
                         else monthData.sites.set(siteKey, { name: siteName, value: rowValue });
 
-                        // 4. Week Aggregation (Prioritize Col M [12])
+                        // 4. Week Aggregation
+                        // Priority: Col M (index 12) -> Date Calc -> Fallback
                         let weekNum = 0;
-                        let weekRaw = row[12] ? row[12].toString().trim() : "";
+                        let weekRaw = (row[12] || "").toString().trim();
                         
-                        // Extract number from Column M (e.g., "Week 1" -> 1)
+                        // Try extract digit from "Week 1", "W1", "1", "01"
                         const weekMatch = weekRaw.match(/(\d+)/);
 
                         if (weekMatch) {
-                            weekNum = parseInt(weekMatch[0]);
+                            weekNum = parseInt(weekMatch[0], 10);
                         } else if (dateObj) {
-                            // Smart Fallback: If Col M is empty, calculate from Date
+                            // Smart Fallback
                             weekNum = calculateWeekFromDate(dateObj);
                         }
+
+                        // Correction: If weekNum is 0, force it to 1 (Assume W1 if unknown)
+                        // Or if Month is Mei-Agustus, just group them.
+                        if (weekNum === 0 && monthName !== "Mei-Agustus") weekNum = 1;
 
                         let weekKey = "";
                         let weekLabel = "";
                         let sortOrder = 0;
 
-                        if (monthName === "Mei-Agustus" || weekNum === 0) {
-                             weekKey = "legacy";
-                             weekLabel = "Week 1-5 (Mei-Agustus)";
-                             sortOrder = 0; 
+                        if (monthName === "Mei-Agustus") {
+                             weekKey = `W${weekNum > 0 ? weekNum : '1-5'}-MeiAug`;
+                             weekLabel = weekNum > 0 ? `W${weekNum} Mei-Agustus` : `W1-5 Mei-Agustus`;
+                             sortOrder = 0 + (weekNum || 0);
                         } else {
+                             const shortMonth = monthName.substring(0, 3);
                              weekKey = `W${weekNum}-${monthName}`;
-                             weekLabel = `Week ${weekNum} ${monthName}`;
-                             // Sort index: Month Index * 10 + Week Index (e.g. Sept Week 1 = 81)
+                             weekLabel = `W${weekNum} ${shortMonth}`;
+                             
                              const mIdx = monthsOrder.indexOf(monthName);
-                             sortOrder = (mIdx !== -1 ? mIdx + 1 : 99) * 10 + weekNum;
+                             // Base 100 ensures Sep comes after Aug. Week num adds detail.
+                             // Mei-Agustus is idx 0. Sep is idx 9. 
+                             const baseIdx = mIdx !== -1 ? mIdx * 10 : 990; 
+                             sortOrder = baseIdx + weekNum;
                         }
 
                         if (!weekMap.has(weekKey)) {
@@ -308,10 +324,7 @@
                         const ytdValue = item.totalValue;
                         const monthlyTotal = Math.round(ytdValue / 12); 
                         const weeks = {};
-                        for(let w=1; w<=5; w++) {
-                            const weekVal = Math.round(monthlyTotal / 5.5);
-                            weeks[w] = { total: weekVal, components: { nonSoh: Math.round(weekVal*0.2), sto: Math.round(weekVal*0.6), tf: weekVal - Math.round(weekVal*0.2) - Math.round(weekVal*0.6) } };
-                        }
+                        for(let w=1; w<=5; w++) { weeks[w] = { total: 0, components: {} }; }
                         return { id: normalizeString(item.name), name: item.name, value: ytdValue, ytd: { value: ytdValue }, monthly: { value: monthlyTotal, weeks: weeks } };
                     });
 
@@ -322,14 +335,12 @@
                     // Flatten Monthly Data
                     const newMonthlyData = Array.from(monthMap.entries()).map(([month, data]) => {
                         const sitesArray = Array.from(data.sites.values()).sort((a,b) => b.value - a.value);
-                        // Sort Value for Months: Real months first (by index), then legacy
                         const mIdx = monthsOrder.indexOf(month);
-                        const sortIdx = mIdx !== -1 ? mIdx : -1;
-                        return { name: month, value: data.total, percentage: 0, sites: sitesArray, sortIdx: sortIdx };
+                        return { name: month, value: data.total, percentage: 0, sites: sitesArray, sortIdx: mIdx };
                     });
                     const totalMonthly = newMonthlyData.reduce((a,b) => a + b.value, 0);
                     newMonthlyData.forEach(d => { d.percentage = totalMonthly > 0 ? (d.value / totalMonthly * 100) : 0; });
-                    AppState.monthlyBreakdown = newMonthlyData.sort((a,b) => b.sortIdx - a.sortIdx);
+                    AppState.monthlyBreakdown = newMonthlyData.sort((a,b) => a.sortIdx - b.sortIdx);
 
                     // Flatten Weekly Data
                     const newWeeklyData = Array.from(weekMap.values()).map(data => {
@@ -338,7 +349,7 @@
                     });
                     const totalWeekly = newWeeklyData.reduce((a,b) => a + b.value, 0);
                     newWeeklyData.forEach(d => { d.percentage = totalWeekly > 0 ? (d.value / totalWeekly * 100) : 0; });
-                    AppState.weeklyBreakdown = newWeeklyData.sort((a,b) => b.sortOrder - a.sortOrder);
+                    AppState.weeklyBreakdown = newWeeklyData.sort((a,b) => a.sortOrder - b.sortOrder);
                     
                     render(); // Re-render to update UI with fresh data
                 }
@@ -356,19 +367,19 @@
         };
 
         const setWeeklyDrillAction = (weekId) => {
-            AppState.selectedWeek = weekId;
+            AppState.selectedWeeklyCard = weekId;
             render();
         };
 
         const clearWeeklyDrillAction = () => {
-            AppState.selectedWeek = null; 
+            AppState.selectedWeeklyCard = null; 
             render();
         };
 
         const setReportViewAction = (v) => { 
             AppState.reportView = v; 
             AppState.selectedMonth = null; 
-            AppState.selectedWeek = null; 
+            AppState.selectedWeeklyCard = null; 
             render(); 
         };
         
@@ -453,7 +464,7 @@
             const data = AppState.dashboardData;
             const view = AppState.reportView;
             const selectedMonth = AppState.selectedMonth;
-            const selectedWeekId = AppState.selectedWeek;
+            const selectedWeekId = AppState.selectedWeeklyCard;
             
             let currentData = [];
             let currentTotal = 0;
@@ -591,23 +602,11 @@
                 return `<div><div class="flex justify-between text-xs font-bold mb-1 text-slate-600"><span>${item.name}</span><span>${formatIDR(v)}</span></div><div class="w-full bg-slate-200 rounded-full h-3 overflow-hidden"><div class="h-full rounded-full bg-gradient-to-r from-orange-400 to-orange-600" style="width:${(v/maxVal)*100}%"></div></div></div>`;
             }).join('')}</div>`;
 
-            let alertHTML = '';
-            if(AppState.pendingGR.length > 0) {
-                alertHTML = `
-                <div class="mb-10 bg-slate-900 rounded-2xl p-2 shadow-xl animate-in slide-in-from-top">
-                    <div class="bg-red-500/10 border border-red-500/50 rounded-xl p-6">
-                        <div class="flex items-center mb-4"><div class="bg-red-500 p-2 rounded-lg mr-4"><i data-lucide="alert-triangle" class="text-white w-6 h-6"></i></div><div><h3 class="text-xl font-bold text-white">Action Required: Overdue Goods Receipt</h3><p class="text-red-300 text-sm">Shipments older than 30 days pending confirmation.</p></div></div>
-                        <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">${AppState.pendingGR.map(i => `<div class="bg-red-500/20 p-3 rounded-lg border border-red-500/30 flex justify-between items-center"><div><div class="font-bold text-white text-sm">${i.project}</div><div class="text-xs text-red-200">STO: ${i.sto}</div></div><div class="text-right"><div class="font-bold text-red-400 text-lg">${i.days} Days</div><div class="text-[10px] text-red-300">Since ${i.date}</div></div></div>`).join('')}<div class="col-span-full text-center mt-2 font-bold text-white">"Please complete Goods Receipt immediately before requesting new items."</div></div>
-                    </div>
-                </div>`;
-            }
-
             return `
             <div class="min-h-screen pt-24 pb-12 bg-slate-950 text-white animate-in">
                 <div class="max-w-7xl mx-auto px-4">
                     <button onclick="window.nav('home')" class="mb-6 flex items-center text-slate-400 hover:text-orange-400 text-sm font-medium uppercase"><i data-lucide="arrow-left" class="w-4 h-4 mr-2"></i> Back to Home</button>
                     ${topContentHTML}
-                    ${alertHTML}
                     <div class="bg-slate-900/80 border border-slate-800 rounded-2xl p-2 mb-8 flex flex-col md:flex-row justify-between items-center gap-4">
                         <div class="flex space-x-2">
                             <button onclick="window.setReportView('YTD')" class="px-6 py-2 rounded-lg text-sm font-bold transition-all ${view==='YTD'?'bg-orange-500 text-white shadow-lg':'text-slate-400 hover:bg-slate-800'}">YTD</button>
