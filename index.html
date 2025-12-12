@@ -31,6 +31,10 @@
         
         .locked-field { @apply bg-slate-100 text-slate-400 cursor-not-allowed border-slate-200 pointer-events-none; }
         .clickable-row { @apply cursor-pointer hover:bg-orange-50 transition-colors border-l-4 border-transparent hover:border-orange-500; }
+        
+        /* Slider Styles */
+        .slide { position: absolute; inset: 0; opacity: 0; transition: opacity 1s ease-in-out; }
+        .slide.active { opacity: 1; }
     </style>
 </head>
 <body class="bg-slate-50 text-slate-900 selection:bg-orange-500 selection:text-white">
@@ -86,7 +90,9 @@
             weeklyBreakdown: [],
             ytdBreakdown: [], 
             nonSohData: [], 
-            pendingGR: []
+            pendingGR: [],
+            sliderIndex: 0,
+            sliderInterval: null
         };
 
         // --- 3. UTILITIES ---
@@ -228,36 +234,8 @@
                 const resUtil = await fetch(utilSheetUrl);
                 if(resUtil.ok) {
                     const textUtil = await resUtil.text();
-                    const rowsUtil = parseCSV(textUtil).slice(1); // Row 0 is header (hopefully)
+                    const rowsUtil = parseCSV(textUtil).slice(1);
                     
-                    // --- DYNAMIC HEADER MAPPING ---
-                    // To fix missing week issues if columns shifted
-                    const headers = rowsUtil[0].map(h => h.toString().toLowerCase().trim());
-                    
-                    // Default Indices (Fallback)
-                    let IDX_SITE = 8; // I
-                    let IDX_VAL = 10; // K
-                    let IDX_DATE = 1; // B
-                    let IDX_WEEK = 12; // M
-                    let IDX_CAT = 11; // L
-
-                    // Try to find indices dynamically
-                    const findIdx = (keywords) => headers.findIndex(h => keywords.some(k => h.includes(k)));
-                    
-                    const idxSite = findIdx(['site', 'plant', 'project']);
-                    const idxVal = findIdx(['amount', 'value', 'total', 'price', 'dpp']);
-                    const idxDate = findIdx(['date', 'tanggal', 'month', 'bulan']);
-                    const idxWeek = findIdx(['week', 'minggu']);
-                    const idxCat = findIdx(['category', 'kategori', 'group']);
-
-                    if(idxSite !== -1) IDX_SITE = idxSite;
-                    if(idxVal !== -1) IDX_VAL = idxVal;
-                    if(idxDate !== -1) IDX_DATE = idxDate;
-                    if(idxWeek !== -1) IDX_WEEK = idxWeek;
-                    if(idxCat !== -1) IDX_CAT = idxCat;
-
-                    // console.log("Mapped Columns:", { IDX_SITE, IDX_VAL, IDX_DATE, IDX_WEEK, IDX_CAT });
-
                     const siteMap = new Map();
                     const monthMap = new Map(); 
                     const weekMap = new Map();
@@ -266,37 +244,32 @@
                     
                     AppState.nonSohData = [];
 
-                    // Start from row 1 (skip header)
-                    for (let i = 1; i < rowsUtil.length; i++) {
-                        const row = rowsUtil[i];
-                        // Validation: Must have Value. Site is optional (default Unknown)
-                        if (!row[IDX_VAL]) continue;
-
-                        const siteName = row[IDX_SITE] ? row[IDX_SITE].trim() : "Unknown Site";
+                    rowsUtil.forEach(row => {
+                        if(!row[8] || !row[10]) return;
+                        const siteName = row[8].trim();
                         const siteKey = normalizeString(siteName); 
-                        
-                        // Parse Value
-                        let valStr = row[IDX_VAL].toString();
-                        let cleanVal = valStr.replace(/[Rp\s.]/g, '').replace(',', '.');
+                        let cleanVal = row[10].replace(/[Rp\s.]/g, '').replace(',', '.');
                         const rowValue = parseFloat(cleanVal) || 0;
-                        const dateRaw = row[IDX_DATE]; 
+                        const dateRaw = row[1]; // Col B (Date)
                         
-                        // Category
-                        const categoryName = row[IDX_CAT] ? row[IDX_CAT].trim() : "Uncategorized";
+                        // Category Aggregation (Col L / Index 11)
+                        const categoryName = row[11] ? row[11].trim() : "Uncategorized";
                         if (!categoryMap.has(categoryName)) categoryMap.set(categoryName, 0);
                         categoryMap.set(categoryName, categoryMap.get(categoryName) + rowValue);
 
+                        // Capture Non SOH Data
                         if (categoryName.toLowerCase().includes("non soh")) {
                             AppState.nonSohData.push({
-                                "Date": dateRaw || "-",
+                                "Date": row[1] || "-",
+                                "Description": row[3] || "-",
                                 "Site": siteName,
                                 "Category": categoryName,
                                 "Amount": rowValue,
-                                "Week": row[IDX_WEEK] || "-"
+                                "Week": row[12] || "-"
                             });
                         }
 
-                        // 1. Site Aggregation
+                        // 1. Site Aggregation (YTD)
                         if (siteMap.has(siteKey)) {
                             siteMap.get(siteKey).totalValue += rowValue;
                         } else {
@@ -319,9 +292,9 @@
 
                         // 4. Week Aggregation
                         let weekNum = 0;
-                        let weekRaw = (row[IDX_WEEK] || "").toString().trim();
-                        
+                        let weekRaw = (row[12] || "").toString().trim();
                         const weekMatch = weekRaw.match(/(\d+)/);
+
                         if (weekMatch) {
                             weekNum = parseInt(weekMatch[0]);
                         } else if (dateObj) {
@@ -354,7 +327,7 @@
                         weekData.total += rowValue;
                         if (weekData.sites.has(siteKey)) weekData.sites.get(siteKey).value += rowValue;
                         else weekData.sites.set(siteKey, { name: siteName, value: rowValue });
-                    }
+                    });
 
                     // Flatten Data
                     const newDashboardData = Array.from(siteMap.values()).map(item => {
@@ -381,6 +354,7 @@
                     newWeeklyData.forEach(d => { d.percentage = totalWeekly > 0 ? (d.value / totalWeekly * 100) : 0; });
                     AppState.weeklyBreakdown = newWeeklyData.sort((a,b) => a.sortOrder - b.sortOrder);
                     
+                    // Flatten Category Data
                     const newYtdBreakdown = Array.from(categoryMap.entries()).map(([name, val]) => ({
                         name: name,
                         value: val,
@@ -405,35 +379,32 @@
             XLSX.writeFile(workbook, `Part_Non_SOH_Report_${date}.xlsx`);
         };
 
-        const setMonthAction = (monthName) => {
-            AppState.selectedMonth = monthName;
-            render();
+        // Slider Logic
+        const startImageSlider = () => {
+            if (AppState.sliderInterval) clearInterval(AppState.sliderInterval);
+            AppState.sliderInterval = setInterval(() => {
+                const slides = document.querySelectorAll('.slide');
+                if (slides.length === 0) return;
+                if (slides[AppState.sliderIndex]) slides[AppState.sliderIndex].classList.remove('active');
+                AppState.sliderIndex = (AppState.sliderIndex + 1) % slides.length;
+                if (slides[AppState.sliderIndex]) slides[AppState.sliderIndex].classList.add('active');
+            }, 4000);
         };
 
-        const clearMonthAction = () => {
-            AppState.selectedMonth = null;
-            render();
+        const stopImageSlider = () => {
+            if (AppState.sliderInterval) {
+                clearInterval(AppState.sliderInterval);
+                AppState.sliderInterval = null;
+            }
         };
 
-        const setWeeklyDrillAction = (weekId) => {
-            AppState.selectedWeeklyCard = weekId;
-            render();
-        };
-
-        const clearWeeklyDrillAction = () => {
-            AppState.selectedWeeklyCard = null; 
-            render();
-        };
-
-        const setReportViewAction = (v) => { 
-            AppState.reportView = v; 
-            AppState.selectedMonth = null; 
-            AppState.selectedWeeklyCard = null; 
-            render(); 
-        };
-        
+        // Navigation Actions
+        const setMonthAction = (monthName) => { AppState.selectedMonth = monthName; render(); };
+        const clearMonthAction = () => { AppState.selectedMonth = null; render(); };
+        const setWeeklyDrillAction = (weekId) => { AppState.selectedWeeklyCard = weekId; render(); };
+        const clearWeeklyDrillAction = () => { AppState.selectedWeeklyCard = null; render(); };
+        const setReportViewAction = (v) => { AppState.reportView = v; AppState.selectedMonth = null; AppState.selectedWeeklyCard = null; render(); };
         const setWeekAction = (w) => { AppState.selectedWeek = w; render(); }; 
-        
         const navAction = (view, sectionId) => {
             stopImageSlider();
             AppState.currentView = view;
@@ -449,31 +420,117 @@
         const runPROSAction = () => window.open('https://analisis-pr-oustanding-dc-palaran.vercel.app/', '_blank');
         const runFFFAction = () => window.open('https://fff-class.vercel.app/', '_blank');
         const handleStockCheckAction = (e) => { e.preventDefault(); const s = e.target.site.value; if(!s) return alert("Pilih Site"); window.open(`https://wa.me/628115550123?text=${encodeURIComponent('Cek stock: '+s+' '+e.target.item.value)}`, '_blank'); };
-        const handleTrackAction = async (e) => { /* Track logic reused */ }; 
+        
+        // --- FIXED TRACKING ACTION (RESTORED TO ORIGINAL STABLE VERSION) ---
+        const handleTrackAction = async (e) => { 
+            e.preventDefault(); 
+            const inputEl = document.getElementById('stoInput'); 
+            if(!inputEl) return; 
+            const input = inputEl.value.trim(); 
+            const container = document.getElementById('trackingResult'); 
+            if(!input) return; 
+            
+            container.innerHTML = '<div class="text-center p-4 text-slate-500"><i data-lucide="loader-2" class="animate-spin inline mr-2"></i> Searching...</div>'; 
+            container.classList.remove('hidden'); 
+            renderIcons(); 
+
+            // Fallback Mock
+            const mockTrackData = [
+                { sto: '450012345', status: 'DISPATCH', project: 'PL01 MSJ' },
+                { sto: '123', status: 'DELIVERED', project: 'PL03 BE' }
+            ];
+
+            try { 
+                const res = await fetch('https://docs.google.com/spreadsheets/d/1ULpZq-bZwvTaEfQ3EcnfTjOm3mOW23rhxGK1OZYBesI/export?format=csv&gid=0'); 
+                let found = null; 
+                let rawStatus = "";
+                let project = "";
+
+                if(res.ok) { 
+                    const rows = parseCSV(await res.text()); 
+                    // RESTORED: Hardcoded indices for stability
+                    // Column G (Index 6) = STO
+                    // Column AH (Index 33) = Status
+                    // Column AJ (Index 35) = Project
+                    found = rows.find(r => r[6] && r[6].toString().trim() === input); 
+                    
+                    if (found) {
+                        rawStatus = (found[33] || '').toUpperCase();
+                        project = found[35] || 'Unknown';
+                    }
+                } 
+                
+                if (!found) { 
+                    const mock = mockTrackData.find(m => m.sto === input); 
+                    if (mock) { 
+                        found = true; // Flag as found for mock
+                        rawStatus = mock.status; 
+                        project = mock.project; 
+                    } 
+                } 
+                
+                if(found) { 
+                    let activeIndex = 0; 
+                    if (rawStatus.includes('WAITING') || rawStatus.includes('PACKING') || rawStatus.includes('PICKING')) activeIndex = 1; 
+                    else if (rawStatus.includes('TERKIRIM') || rawStatus.includes('DISPATCH') || rawStatus.includes('JALAN') || rawStatus.includes('OTW')) activeIndex = 2; 
+                    else if (rawStatus.includes('DELIVERED') || rawStatus.includes('SAMPAI') || rawStatus.includes('COMPLETE') || rawStatus.includes('RECEIVED')) activeIndex = 3; 
+                    
+                    const steps = [
+                        { t: 'Order Confirmed (Realized)', s: 'STO verified by DC Palaran', i: 'check-circle' }, 
+                        { t: 'Picking & Packing', s: 'Items being retrieved from Bin Location & Staging and manifest generation', i: 'package' }, 
+                        { t: 'Dispatched', s: 'Handed over to transporter', i: 'truck' }, 
+                        { t: 'Delivered', s: 'Received at Site Warehouse', i: 'map-pin' }
+                    ]; 
+                    
+                    let html = `
+                        <div class="bg-slate-50 border border-slate-200 rounded-lg p-4 mb-6 flex justify-between items-center">
+                            <div><div class="text-xs text-slate-500 uppercase font-bold">Project</div><div class="text-lg font-bold text-slate-900">${project}</div></div>
+                            <div class="text-right"><div class="text-xs text-slate-500 uppercase font-bold">Status</div><div class="text-sm font-bold text-orange-600">${rawStatus || 'CONFIRMED'}</div></div>
+                        </div>
+                        <div class="space-y-8 relative pl-2 mt-8">
+                            <div class="absolute left-6 top-2 bottom-4 w-0.5 bg-slate-200 -z-10"></div>`; 
+                    
+                    steps.forEach((step, idx) => { 
+                        const isActive = idx <= activeIndex; 
+                        const isCurrent = idx === activeIndex; 
+                        let color = 'bg-slate-200 text-slate-400'; 
+                        // RESTORED COLORS: Red -> Yellow -> Lime -> Green
+                        if (isActive) { 
+                            if (idx === 0) color = 'bg-red-600 text-white shadow-lg shadow-red-200';
+                            else if (idx === 1) color = 'bg-yellow-500 text-white shadow-lg shadow-yellow-200';
+                            else if (idx === 2) color = 'bg-lime-500 text-white shadow-lg shadow-lime-200';
+                            else if (idx === 3) color = 'bg-green-700 text-white shadow-lg shadow-green-200';
+                        } 
+                        html += `
+                        <div class="relative flex items-start group ${isActive ? '' : 'opacity-50'}">
+                            <div class="w-8 h-8 rounded-full flex items-center justify-center relative z-10 transition-all ${color} ${isCurrent ? 'scale-110 ring-4 ring-white shadow-lg' : ''}">
+                                <i data-lucide="${step.i}" class="w-4 h-4"></i>
+                            </div>
+                            <div class="ml-6 pt-1">
+                                <h4 class="font-bold text-slate-900">${step.t}</h4>
+                                <p class="text-xs text-slate-500">${step.s}</p>
+                            </div>
+                        </div>`; 
+                    }); 
+                    html += `</div>`; 
+                    container.innerHTML = html; 
+                    renderIcons(); 
+                } else { 
+                    container.innerHTML = `<div class="bg-red-50 text-red-500 p-4 rounded text-center border border-red-100 font-bold">STO Not Found</div>`; 
+                } 
+            } catch(err) { 
+                console.error(err);
+                container.innerHTML = `<div class="bg-red-50 text-red-500 p-4 rounded text-center border border-red-100">Connection Error</div>`; 
+                renderIcons(); 
+            } 
+        };
+        
         const handleZerpdUploadAction = async (input) => { /* Zerpd Logic reused */ AppState.isZerpdUploaded = true; render(); };
         const deleteZerpdFileAction = () => { if(confirm("Hapus?")) { AppState.isZerpdUploaded = false; AppState.isCatalogLocked = true; render(); } };
         const checkPartNumberAction = () => { AppState.isCatalogLocked = false; render(); };
-        const lockFieldsAction = () => {}; const unlockFieldsAction = () => {};
+        const lockFieldsAction = () => {}; 
+        const unlockFieldsAction = () => {};
         const handleCatalogSubmitAction = (e) => { e.preventDefault(); alert("Submitted"); };
-
-        // Slider Logic
-        const startImageSlider = () => {
-            if (AppState.sliderInterval) clearInterval(AppState.sliderInterval);
-            AppState.sliderInterval = setInterval(() => {
-                const slides = document.querySelectorAll('.slide');
-                if (slides.length === 0) return;
-                slides[AppState.sliderIndex].classList.remove('active');
-                AppState.sliderIndex = (AppState.sliderIndex + 1) % slides.length;
-                slides[AppState.sliderIndex].classList.add('active');
-            }, 4000);
-        };
-
-        const stopImageSlider = () => {
-            if (AppState.sliderInterval) {
-                clearInterval(AppState.sliderInterval);
-                AppState.sliderInterval = null;
-            }
-        };
 
         // --- 5. COMPONENT GENERATORS ---
         function generatePendingGRHtml() {
@@ -516,132 +573,6 @@
             return `<div class="min-h-screen pt-24 pb-12 bg-slate-900 text-white animate-in"><div class="max-w-7xl mx-auto px-4 text-center mb-12"><h2 class="text-4xl font-extrabold mb-4">Analysis Tools</h2><button onclick="window.nav('home')" class="text-orange-500 hover:text-orange-400">Back to Home</button></div><div class="max-w-7xl mx-auto px-4 grid grid-cols-1 md:grid-cols-3 gap-8"><div onclick="window.open('https://fff-class.vercel.app/', '_blank')" class="bg-slate-800 rounded-2xl p-8 border border-slate-700 hover:border-orange-500 cursor-pointer group relative overflow-hidden"><div class="absolute top-0 right-0 w-32 h-32 bg-orange-500 opacity-10 rounded-bl-full -mr-8 -mt-8"></div><div class="w-16 h-16 bg-orange-500 rounded-2xl flex items-center justify-center mb-6"><i data-lucide="git-merge" class="text-white w-8 h-8"></i></div><h3 class="text-xl font-bold mb-3">FFF Class Analysis</h3><span class="text-xs font-bold uppercase text-slate-500 group-hover:text-white flex items-center">Launch Tool <i data-lucide="arrow-right" class="ml-2 w-4 h-4"></i></span></div><div onclick="window.open('https://analisis-pr-oustanding-dc-palaran.vercel.app/', '_blank')" class="bg-slate-800 rounded-2xl p-8 border border-slate-700 hover:border-blue-500 cursor-pointer group relative overflow-hidden"><div class="absolute top-0 right-0 w-32 h-32 bg-blue-600 opacity-10 rounded-bl-full -mr-8 -mt-8"></div><div class="w-16 h-16 bg-blue-600 rounded-2xl flex items-center justify-center mb-6"><i data-lucide="bar-chart-3" class="text-white w-8 h-8"></i></div><h3 class="text-xl font-bold mb-3">PR OS Analysis</h3><span class="text-xs font-bold uppercase text-slate-500 group-hover:text-white flex items-center">Launch Tool <i data-lucide="arrow-right" class="ml-2 w-4 h-4"></i></span></div><div onclick="window.open('https://block-master-dc-palaran.vercel.app/', '_blank')" class="bg-slate-800 rounded-2xl p-8 border border-slate-700 hover:border-slate-500 cursor-pointer group relative overflow-hidden"><div class="absolute top-0 right-0 w-32 h-32 bg-slate-600 opacity-10 rounded-bl-full -mr-8 -mt-8"></div><div class="w-16 h-16 bg-slate-600 rounded-2xl flex items-center justify-center mb-6"><i data-lucide="alert-triangle" class="text-white w-8 h-8"></i></div><h3 class="text-xl font-bold mb-3">Block Master</h3><span class="text-xs font-bold uppercase text-slate-500 group-hover:text-white flex items-center">Launch Tool <i data-lucide="arrow-right" class="ml-2 w-4 h-4"></i></span></div></div></div>`;
         }
 
-        // --- RENDER ABOUT PAGE ---
-        function renderAbout() {
-            const images = [
-                'https://images.unsplash.com/photo-1586528116311-ad8dd3c8310d?auto=format&fit=crop&w=1200&q=80',
-                'https://images.unsplash.com/photo-1553413077-190dd305871c?auto=format&fit=crop&w=1200&q=80',
-                'https://images.unsplash.com/photo-1486262715619-67b85e0b08d3?auto=format&fit=crop&w=1200&q=80'
-            ];
-            
-            const currentIndex = AppState.sliderIndex;
-            
-            const sliderHTML = `
-                <div class="relative w-full h-[500px] overflow-hidden rounded-xl shadow-2xl mb-12 group">
-                    ${images.map((img, idx) => `
-                        <div class="slide ${idx === currentIndex ? 'active' : ''}">
-                            <img src="${img}" class="w-full h-full object-cover transition-transform duration-[4000ms] ease-in-out ${idx === currentIndex ? 'scale-110' : 'scale-100'}">
-                            <div class="absolute inset-0 bg-gradient-to-t from-slate-900 via-transparent to-transparent opacity-80"></div>
-                        </div>
-                    `).join('')}
-                    <div class="absolute bottom-8 left-8 text-white z-10">
-                        <span class="bg-orange-500 px-3 py-1 text-xs font-bold uppercase tracking-widest rounded-sm mb-2 inline-block">DC Palaran Profile</span>
-                        <h2 class="text-4xl font-extrabold mb-2">Pusat Logistik Terintegrasi</h2>
-                        <p class="text-slate-300 max-w-xl">Mengelola rantai pasok pertambangan dengan efisiensi tinggi dan akurasi data real-time.</p>
-                    </div>
-                </div>
-            `;
-
-            const orgChartHTML = `
-                <div class="mb-16">
-                    <div class="text-center mb-10">
-                        <h3 class="text-3xl font-bold text-slate-800">Struktur Organisasi</h3>
-                        <div class="w-20 h-1 bg-orange-500 mx-auto mt-4 rounded-full"></div>
-                    </div>
-                    
-                    <div class="flex flex-col items-center gap-8">
-                        <div class="flex flex-col items-center animate-in" style="animation-delay: 0.1s;">
-                            <div class="bg-white border-l-4 border-orange-500 shadow-lg rounded-lg p-6 w-64 text-center transform hover:scale-105 transition-all">
-                                <div class="w-20 h-20 bg-slate-200 rounded-full mx-auto mb-4 overflow-hidden border-2 border-orange-500">
-                                    <img src="https://ui-avatars.com/api/?name=Kepala+DC&background=random" class="w-full h-full object-cover">
-                                </div>
-                                <h4 class="font-bold text-lg text-slate-800">Nama Kepala DC</h4>
-                                <p class="text-orange-600 text-sm font-bold uppercase">Kepala Gudang</p>
-                            </div>
-                            <div class="h-8 w-0.5 bg-slate-300"></div>
-                        </div>
-
-                        <div class="flex gap-8 flex-wrap justify-center relative">
-                            <div class="absolute -top-8 left-1/2 -translate-x-1/2 w-3/4 h-8 border-t-2 border-r-2 border-l-2 border-slate-300 rounded-t-xl -z-10"></div>
-                            
-                            <div class="bg-white border-t-4 border-blue-500 shadow-md rounded-lg p-5 w-56 text-center animate-in" style="animation-delay: 0.2s;">
-                                <div class="w-16 h-16 bg-slate-100 rounded-full mx-auto mb-3 overflow-hidden">
-                                    <img src="https://ui-avatars.com/api/?name=Admin+Logistik&background=random" class="w-full h-full object-cover">
-                                </div>
-                                <h4 class="font-bold text-md text-slate-800">Nama Admin</h4>
-                                <p class="text-slate-500 text-xs uppercase">Admin Logistik</p>
-                            </div>
-
-                            <div class="bg-white border-t-4 border-green-500 shadow-md rounded-lg p-5 w-56 text-center animate-in" style="animation-delay: 0.3s;">
-                                <div class="w-16 h-16 bg-slate-100 rounded-full mx-auto mb-3 overflow-hidden">
-                                    <img src="https://ui-avatars.com/api/?name=Supervisor+Ops&background=random" class="w-full h-full object-cover">
-                                </div>
-                                <h4 class="font-bold text-md text-slate-800">Nama SPV</h4>
-                                <p class="text-slate-500 text-xs uppercase">Supervisor Ops</p>
-                            </div>
-
-                            <div class="bg-white border-t-4 border-purple-500 shadow-md rounded-lg p-5 w-56 text-center animate-in" style="animation-delay: 0.4s;">
-                                <div class="w-16 h-16 bg-slate-100 rounded-full mx-auto mb-3 overflow-hidden">
-                                    <img src="https://ui-avatars.com/api/?name=Staff+Gudang&background=random" class="w-full h-full object-cover">
-                                </div>
-                                <h4 class="font-bold text-md text-slate-800">Nama Staff</h4>
-                                <p class="text-slate-500 text-xs uppercase">Staff Gudang</p>
-                            </div>
-                        </div>
-                    </div>
-                </div>
-            `;
-
-            const timelineHTML = `
-                <div class="bg-slate-900 rounded-2xl p-10 text-white">
-                    <div class="text-center mb-10">
-                        <h3 class="text-3xl font-bold">Progres Pembangunan DC</h3>
-                        <p class="text-slate-400 mt-2">Perjalanan dari konsep hingga operasional</p>
-                    </div>
-
-                    <div class="relative border-l-2 border-slate-700 ml-4 md:ml-10 space-y-12">
-                        <div class="relative pl-8 md:pl-12 group">
-                            <div class="absolute -left-[9px] top-0 w-5 h-5 bg-orange-500 rounded-full border-4 border-slate-900 group-hover:scale-125 transition-transform"></div>
-                            <span class="text-orange-400 font-mono text-sm mb-1 block">Januari 2024</span>
-                            <h4 class="text-xl font-bold mb-2">Perencanaan & Ground Breaking</h4>
-                            <p class="text-slate-400 text-sm leading-relaxed">Tahap awal perencanaan desain gudang, perizinan, dan peletakan batu pertama di lokasi Palaran.</p>
-                        </div>
-                        <div class="relative pl-8 md:pl-12 group">
-                            <div class="absolute -left-[9px] top-0 w-5 h-5 bg-slate-600 rounded-full border-4 border-slate-900 group-hover:bg-blue-500 transition-colors"></div>
-                            <span class="text-slate-500 font-mono text-sm mb-1 block">Maret 2024</span>
-                            <h4 class="text-xl font-bold mb-2">Pembangunan Struktur Utama</h4>
-                            <p class="text-slate-400 text-sm leading-relaxed">Pirikan tiang pancang baja, pemasangan kerangka atap, dan pengecoran lantai gudang utama dengan standar heavy-duty.</p>
-                        </div>
-                        <div class="relative pl-8 md:pl-12 group">
-                            <div class="absolute -left-[9px] top-0 w-5 h-5 bg-slate-600 rounded-full border-4 border-slate-900 group-hover:bg-green-500 transition-colors"></div>
-                            <span class="text-slate-500 font-mono text-sm mb-1 block">Mei 2024</span>
-                            <h4 class="text-xl font-bold mb-2">Instalasi Sistem & Rak</h4>
-                            <p class="text-slate-400 text-sm leading-relaxed">Pemasangan rak pallet (racking system), instalasi listrik, CCTV, dan setup jaringan untuk sistem WMS.</p>
-                        </div>
-                        <div class="relative pl-8 md:pl-12 group">
-                            <div class="absolute -left-[9px] top-0 w-5 h-5 bg-green-500 rounded-full border-4 border-slate-900 shadow-[0_0_15px_rgba(34,197,94,0.5)]"></div>
-                            <span class="text-green-400 font-mono text-sm mb-1 block">Juni 2024 - Sekarang</span>
-                            <h4 class="text-xl font-bold mb-2">Go Live & Operasional Penuh</h4>
-                            <p class="text-slate-400 text-sm leading-relaxed">DC Palaran resmi beroperasi sebagai hub logistik utama, melayani distribusi ke seluruh site tambang.</p>
-                        </div>
-                    </div>
-                </div>
-            `;
-
-            return `
-                <div class="min-h-screen pt-24 pb-12 bg-slate-50 animate-in">
-                    <div class="max-w-6xl mx-auto px-4">
-                        <button onclick="window.nav('home')" class="mb-6 flex items-center text-slate-500 hover:text-orange-600 font-medium text-sm">
-                            <i data-lucide="arrow-left" class="w-4 h-4 mr-2"></i> Back to Home
-                        </button>
-                        ${sliderHTML}
-                        ${orgChartHTML}
-                        ${timelineHTML}
-                    </div>
-                </div>
-            `;
-        }
-
         function renderCatalog() {
             const plantOptions = Array.from({length: 28}, (_, i) => `<option value="PL${String(i + 1).padStart(2, '0')}">PL${String(i + 1).padStart(2, '0')}</option>`).join('');
             const storageLocOptions = Array.from({length: 15}, (_, i) => `<option value="S${String(i + 1).padStart(3, '0')}">S${String(i + 1).padStart(3, '0')}</option>`).join('');
@@ -653,6 +584,30 @@
             const disabledAttr = AppState.isCatalogLocked ? "disabled" : "";
 
             return `<div class="min-h-screen pt-24 pb-12 bg-slate-50 text-slate-900 animate-in"><div class="max-w-6xl mx-auto px-4"><button onclick="window.nav('home')" class="mb-6 flex items-center text-slate-500 hover:text-orange-600 font-medium text-sm"><i data-lucide="arrow-left" class="w-4 h-4 mr-2"></i> Back to Home</button><div class="bg-white rounded-xl shadow-xl overflow-hidden border border-slate-200"><div class="bg-slate-900 p-8 text-white"><h2 class="text-3xl font-bold mb-2 flex items-center"><i data-lucide="file-text" class="mr-3 text-orange-500"></i> New Material Request</h2><p class="text-slate-400">Formulir registrasi Master Data Material baru.</p></div><div class="p-8"><div class="bg-orange-50 border border-orange-200 rounded-lg p-6 mb-8"><div class="flex justify-between items-start"><div><h4 class="font-bold text-orange-800 mb-2 flex items-center"><i data-lucide="shield-check" class="w-5 h-5 mr-2"></i> Duplicate Check (ZERPD)</h4><p class="text-sm text-orange-700 mb-4">Upload file <strong>ZERPD.xlsx</strong> (Format: [Tanggal] ZERPD ALL SITE) untuk membuka formulir.</p></div>${AppState.isZerpdUploaded ? `<button onclick="window.deleteZerpdFile()" class="text-red-500 hover:text-red-700 flex items-center text-sm font-bold"><i data-lucide="trash-2" class="w-4 h-4 mr-1"></i> Remove File</button>` : ''}</div>${!AppState.isZerpdUploaded ? `<input type="file" accept=".xlsx" onchange="window.handleZerpdUpload(this)" class="block w-full text-sm text-slate-500 file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-sm file:font-semibold file:bg-orange-500 file:text-white hover:file:bg-orange-600"/>` : `<div class="text-sm font-bold text-green-600">ZERPD File Loaded. Ready to verify.</div>`}<div id="zerpdStatus" class="text-sm font-bold text-slate-400 mt-2">Waiting for file...</div></div><form onsubmit="window.handleCatalogSubmit(event)" class="space-y-8"><div class="bg-slate-50 p-6 rounded-lg border border-slate-200"><h4 class="font-bold text-slate-800 mb-4 pb-2 border-b border-slate-300 flex items-center"><i data-lucide="user" class="w-4 h-4 mr-2 text-orange-500"></i> Requester Information</h4><div class="grid grid-cols-1 md:grid-cols-2 gap-6"><div><label class="block text-xs font-bold text-slate-500 uppercase mb-1">Requester Name</label><input required name="requester_name" type="text" class="w-full px-3 py-2 border border-slate-300 rounded focus:ring-2 focus:ring-orange-500 outline-none"></div><div><label class="block text-xs font-bold text-slate-500 uppercase mb-1">Department</label><input required name="department" type="text" class="w-full px-3 py-2 border border-slate-300 rounded focus:ring-2 focus:ring-orange-500 outline-none"></div></div></div><div class="bg-blue-50 p-6 rounded-lg border border-blue-200"><h4 class="font-bold text-blue-900 mb-4 pb-2 border-b border-blue-300 flex items-center"><i data-lucide="search" class="w-4 h-4 mr-2"></i> Part Number Verification</h4><div class="grid grid-cols-1 md:grid-cols-2 gap-4"><div class="relative"><label class="block text-xs font-bold text-slate-500 uppercase mb-1">Manufacturing Part Number</label><div class="flex gap-2"><input id="inputMPN" name="manuf_part_number" disabled type="text" class="w-full px-3 py-2 border border-slate-300 rounded focus:ring-2 focus:ring-blue-500 outline-none ${!AppState.isZerpdUploaded?'bg-slate-100 cursor-not-allowed':''}" placeholder="Upload ZERPD first..."><button type="button" onclick="window.checkPartNumber()" ${!AppState.isZerpdUploaded ? 'disabled' : ''} class="bg-blue-600 text-white px-6 py-2 rounded text-xs font-bold hover:bg-blue-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed" id="btnVerifyMPN" disabled>VERIFY</button></div></div><div class="flex items-center"><p id="mpnStatus" class="text-sm font-bold ml-2"></p></div><div class="md:col-span-2 hidden" id="duplicateWarning"><div class="bg-red-100 border-l-4 border-red-500 text-red-700 p-4 rounded shadow-sm"><div class="flex items-start"><i data-lucide="alert-triangle" class="w-5 h-5 mr-2 mt-0.5"></i><div><p class="font-bold">Mohon pastikan kembali PN dikarenakan PN sdh terdaftar di ZERPD</p><p class="text-sm mt-1">Existing Match: <span id="existingMPNDisplay" class="font-mono bg-red-200 px-1 rounded"></span> (Material: <span id="existingMatDisplay" class="font-mono"></span>)</p></div></div></div></div></div></div><div><h4 class="font-bold text-slate-800 mb-4 flex items-center"><i data-lucide="box" class="w-4 h-4 mr-2 text-orange-500"></i> 1. Basic Material Data</h4><div class="grid grid-cols-1 md:grid-cols-3 gap-4"><div class="md:col-span-3"><label class="block text-xs font-bold text-slate-500 uppercase mb-1">Description</label><input required ${disabledAttr} name="description" type="text" class="w-full px-3 py-2 border border-slate-300 rounded outline-none ${lockedClass}" placeholder="Material Description"></div><div><label class="block text-xs font-bold text-slate-500 uppercase mb-1">Old Material</label><input ${disabledAttr} name="old_material" type="text" class="w-full px-3 py-2 border border-slate-300 rounded outline-none ${lockedClass}"></div><div><label class="block text-xs font-bold text-slate-500 uppercase mb-1">Type</label><select ${disabledAttr} name="mat_type" class="w-full px-3 py-2 border border-slate-300 rounded outline-none ${lockedClass}"><option value="">Select...</option>${mtOpts}</select></div><div><label class="block text-xs font-bold text-slate-500 uppercase mb-1">Group</label><select ${disabledAttr} name="mat_group" class="w-full px-3 py-2 border border-slate-300 rounded outline-none ${lockedClass}"><option value="">Select...</option>${matGroups}</select></div><div><label class="block text-xs font-bold text-slate-500 uppercase mb-1">Plant</label><select required ${disabledAttr} name="plant" class="w-full px-3 py-2 border border-slate-300 rounded outline-none ${lockedClass}"><option value="">Select...</option>${plantOptions}</select></div><div><label class="block text-xs font-bold text-slate-500 uppercase mb-1">Base UoM</label><input ${disabledAttr} name="base_uom" class="w-full px-3 py-2 border border-slate-300 rounded outline-none ${lockedClass}"></div></div></div><div><h4 class="font-bold text-slate-800 mb-4 flex items-center"><i data-lucide="settings" class="w-4 h-4 mr-2 text-orange-500"></i> 2. Mfg & Purchasing</h4><div class="grid grid-cols-1 md:grid-cols-3 gap-4"><div><label class="block text-xs font-bold text-slate-500 uppercase mb-1">Part Profile</label><input ${disabledAttr} name="manuf_profile" class="w-full px-3 py-2 border border-slate-300 rounded outline-none ${lockedClass}"></div><div><label class="block text-xs font-bold text-slate-500 uppercase mb-1">Purch Group</label><select ${disabledAttr} name="purch_group" class="w-full px-3 py-2 border border-slate-300 rounded outline-none ${lockedClass}"><option value="">Select...</option>${purchGroups}</select></div><div><label class="block text-xs font-bold text-slate-500 uppercase mb-1">Auto PO</label><select ${disabledAttr} name="auto_po" class="w-full px-3 py-2 border border-slate-300 rounded outline-none ${lockedClass}"><option>Yes</option><option>No</option></select></div></div></div><div><h4 class="font-bold text-slate-800 mb-4 flex items-center"><i data-lucide="bar-chart-2" class="w-4 h-4 mr-2 text-orange-500"></i> 3. MRP</h4><div class="grid grid-cols-1 md:grid-cols-4 gap-4"><div><label class="block text-xs font-bold text-slate-500 uppercase mb-1">MRP Type</label><input ${disabledAttr} value="ND" class="w-full px-3 py-2 border border-slate-300 rounded outline-none ${lockedClass}" readonly></div><div><label class="block text-xs font-bold text-slate-500 uppercase mb-1">Controller</label><input ${disabledAttr} value="M01" class="w-full px-3 py-2 border border-slate-300 rounded outline-none ${lockedClass}" readonly></div><div><label class="block text-xs font-bold text-slate-500 uppercase mb-1">Reorder</label><input ${disabledAttr} value="0" class="w-full px-3 py-2 border border-slate-300 rounded outline-none ${lockedClass}" readonly></div><div><label class="block text-xs font-bold text-slate-500 uppercase mb-1">Lot Size</label><input ${disabledAttr} name="lot" class="w-full px-3 py-2 border border-slate-300 rounded outline-none ${lockedClass}"></div></div></div><div><h4 class="font-bold text-slate-800 mb-4 flex items-center"><i data-lucide="warehouse" class="w-4 h-4 mr-2 text-orange-500"></i> 4. Storage</h4><div class="grid grid-cols-1 md:grid-cols-3 gap-4"><div><label class="block text-xs font-bold text-slate-500 uppercase mb-1">Valuation Class</label><select ${disabledAttr} name="val_class" class="w-full px-3 py-2 border border-slate-300 rounded outline-none ${lockedClass}"><option value="">Select...</option>${valClasses}</select></div><div><label class="block text-xs font-bold text-slate-500 uppercase mb-1">Storage Loc</label><select ${disabledAttr} name="sloc" class="w-full px-3 py-2 border border-slate-300 rounded outline-none ${lockedClass}"><option value="">Select...</option>${storageLocOptions}</select></div><div><label class="block text-xs font-bold text-slate-500 uppercase mb-1">Bin</label><input ${disabledAttr} name="bin" class="w-full px-3 py-2 border border-slate-300 rounded outline-none ${lockedClass}"></div></div></div><div class="pt-6 border-t border-slate-200"><button type="submit" ${disabledAttr} class="w-full bg-orange-500 hover:bg-orange-600 text-white font-bold py-4 rounded-md shadow-lg flex justify-center items-center text-lg disabled:bg-slate-300 disabled:shadow-none disabled:cursor-not-allowed">${AppState.isCatalogLocked ? `<i data-lucide="lock" class="w-5 h-5 mr-2"></i> Verify MPN to Unlock` : `<i data-lucide="send" class="w-5 h-5 mr-2"></i> Submit Request`}</button></div></form></div></div></div></div>`;
+        }
+
+        function renderAbout() {
+            const images = [
+                'https://images.unsplash.com/photo-1586528116311-ad8dd3c8310d?auto=format&fit=crop&w=1200&q=80',
+                'https://images.unsplash.com/photo-1553413077-190dd305871c?auto=format&fit=crop&w=1200&q=80',
+                'https://images.unsplash.com/photo-1486262715619-67b85e0b08d3?auto=format&fit=crop&w=1200&q=80'
+            ];
+            const currentIndex = AppState.sliderIndex;
+            const sliderHTML = `
+                <div class="relative w-full h-[500px] overflow-hidden rounded-xl shadow-2xl mb-12 group">
+                    ${images.map((img, idx) => `<div class="slide ${idx === currentIndex ? 'active' : ''}"><img src="${img}" class="w-full h-full object-cover transition-transform duration-[4000ms] ease-in-out ${idx === currentIndex ? 'scale-110' : 'scale-100'}"><div class="absolute inset-0 bg-gradient-to-t from-slate-900 via-transparent to-transparent opacity-80"></div></div>`).join('')}
+                    <div class="absolute bottom-8 left-8 text-white z-10">
+                        <span class="bg-orange-500 px-3 py-1 text-xs font-bold uppercase tracking-widest rounded-sm mb-2 inline-block">DC Palaran Profile</span>
+                        <h2 class="text-4xl font-extrabold mb-2">Pusat Logistik Terintegrasi</h2>
+                        <p class="text-slate-300 max-w-xl">Mengelola rantai pasok pertambangan dengan efisiensi tinggi dan akurasi data real-time.</p>
+                    </div>
+                </div>`;
+            const orgChartHTML = `
+                <div class="mb-16">
+                    <div class="text-center mb-10"><h3 class="text-3xl font-bold text-slate-800">Struktur Organisasi</h3><div class="w-20 h-1 bg-orange-500 mx-auto mt-4 rounded-full"></div></div>
+                    <div class="flex flex-col items-center gap-8"><div class="flex flex-col items-center animate-in" style="animation-delay: 0.1s;"><div class="bg-white border-l-4 border-orange-500 shadow-lg rounded-lg p-6 w-64 text-center transform hover:scale-105 transition-all"><div class="w-20 h-20 bg-slate-200 rounded-full mx-auto mb-4 overflow-hidden border-2 border-orange-500"><img src="https://ui-avatars.com/api/?name=Kepala+DC&background=random" class="w-full h-full object-cover"></div><h4 class="font-bold text-lg text-slate-800">Nama Kepala DC</h4><p class="text-orange-600 text-sm font-bold uppercase">Kepala Gudang</p></div><div class="h-8 w-0.5 bg-slate-300"></div></div><div class="flex gap-8 flex-wrap justify-center relative"><div class="absolute -top-8 left-1/2 -translate-x-1/2 w-3/4 h-8 border-t-2 border-r-2 border-l-2 border-slate-300 rounded-t-xl -z-10"></div><div class="bg-white border-t-4 border-blue-500 shadow-md rounded-lg p-5 w-56 text-center animate-in" style="animation-delay: 0.2s;"><div class="w-16 h-16 bg-slate-100 rounded-full mx-auto mb-3 overflow-hidden"><img src="https://ui-avatars.com/api/?name=Admin+Logistik&background=random" class="w-full h-full object-cover"></div><h4 class="font-bold text-md text-slate-800">Nama Admin</h4><p class="text-slate-500 text-xs uppercase">Admin Logistik</p></div><div class="bg-white border-t-4 border-green-500 shadow-md rounded-lg p-5 w-56 text-center animate-in" style="animation-delay: 0.3s;"><div class="w-16 h-16 bg-slate-100 rounded-full mx-auto mb-3 overflow-hidden"><img src="https://ui-avatars.com/api/?name=Supervisor+Ops&background=random" class="w-full h-full object-cover"></div><h4 class="font-bold text-md text-slate-800">Nama SPV</h4><p class="text-slate-500 text-xs uppercase">Supervisor Ops</p></div><div class="bg-white border-t-4 border-purple-500 shadow-md rounded-lg p-5 w-56 text-center animate-in" style="animation-delay: 0.4s;"><div class="w-16 h-16 bg-slate-100 rounded-full mx-auto mb-3 overflow-hidden"><img src="https://ui-avatars.com/api/?name=Staff+Gudang&background=random" class="w-full h-full object-cover"></div><h4 class="font-bold text-md text-slate-800">Nama Staff</h4><p class="text-slate-500 text-xs uppercase">Staff Gudang</p></div></div></div></div>`;
+            const timelineHTML = `<div class="bg-slate-900 rounded-2xl p-10 text-white"><div class="text-center mb-10"><h3 class="text-3xl font-bold">Progres Pembangunan DC</h3><p class="text-slate-400 mt-2">Perjalanan dari konsep hingga operasional</p></div><div class="relative border-l-2 border-slate-700 ml-4 md:ml-10 space-y-12"><div class="relative pl-8 md:pl-12 group"><div class="absolute -left-[9px] top-0 w-5 h-5 bg-orange-500 rounded-full border-4 border-slate-900 group-hover:scale-125 transition-transform"></div><span class="text-orange-400 font-mono text-sm mb-1 block">Januari 2024</span><h4 class="text-xl font-bold mb-2">Perencanaan & Ground Breaking</h4><p class="text-slate-400 text-sm leading-relaxed">Tahap awal perencanaan desain gudang, perizinan, dan peletakan batu pertama di lokasi Palaran.</p></div><div class="relative pl-8 md:pl-12 group"><div class="absolute -left-[9px] top-0 w-5 h-5 bg-slate-600 rounded-full border-4 border-slate-900 group-hover:bg-blue-500 transition-colors"></div><span class="text-slate-500 font-mono text-sm mb-1 block">Maret 2024</span><h4 class="text-xl font-bold mb-2">Pembangunan Struktur Utama</h4><p class="text-slate-400 text-sm leading-relaxed">Pirikan tiang pancang baja, pemasangan kerangka atap, dan pengecoran lantai gudang utama dengan standar heavy-duty.</p></div><div class="relative pl-8 md:pl-12 group"><div class="absolute -left-[9px] top-0 w-5 h-5 bg-slate-600 rounded-full border-4 border-slate-900 group-hover:bg-green-500 transition-colors"></div><span class="text-slate-500 font-mono text-sm mb-1 block">Mei 2024</span><h4 class="text-xl font-bold mb-2">Instalasi Sistem & Rak</h4><p class="text-slate-400 text-sm leading-relaxed">Pemasangan rak pallet (racking system), instalasi listrik, CCTV, dan setup jaringan untuk sistem WMS.</p></div><div class="relative pl-8 md:pl-12 group"><div class="absolute -left-[9px] top-0 w-5 h-5 bg-green-500 rounded-full border-4 border-slate-900 shadow-[0_0_15px_rgba(34,197,94,0.5)]"></div><span class="text-green-400 font-mono text-sm mb-1 block">Juni 2024 - Sekarang</span><h4 class="text-xl font-bold mb-2">Go Live & Operasional Penuh</h4><p class="text-slate-400 text-sm leading-relaxed">DC Palaran resmi beroperasi sebagai hub logistik utama, melayani distribusi ke seluruh site tambang.</p></div></div></div>`;
+            return `<div class="min-h-screen pt-24 pb-12 bg-slate-50 animate-in"><div class="max-w-6xl mx-auto px-4"><button onclick="window.nav('home')" class="mb-6 flex items-center text-slate-500 hover:text-orange-600 font-medium text-sm"><i data-lucide="arrow-left" class="w-4 h-4 mr-2"></i> Back to Home</button>${sliderHTML}${orgChartHTML}${timelineHTML}</div></div>`;
         }
 
         function renderDashboard() {
@@ -912,9 +867,9 @@
                 root.insertAdjacentHTML('beforeend', renderCatalog());
             } else if (AppState.currentView === 'analysis') {
                 root.insertAdjacentHTML('beforeend', renderAnalysisLanding());
-            } else if (AppState.currentView === 'about') { // New View
+            } else if (AppState.currentView === 'about') { 
                 root.insertAdjacentHTML('beforeend', renderAbout());
-                startImageSlider(); // Start slider
+                startImageSlider(); 
             }
             renderIcons();
 
