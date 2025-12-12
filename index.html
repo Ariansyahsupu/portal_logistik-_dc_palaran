@@ -77,12 +77,15 @@
             reportView: 'YTD', 
             selectedWeek: 1,
             selectedMonth: null,
+            selectedWeeklyCard: null,
             zerpdData: new Map(),
             isZerpdUploaded: false,
             isCatalogLocked: true,
             dashboardData: [], 
             monthlyBreakdown: [],
             weeklyBreakdown: [],
+            ytdBreakdown: [], 
+            nonSohData: [], // NEW: Stores detailed Non SOH rows for export
             pendingGR: []
         };
 
@@ -98,25 +101,20 @@
             }
         };
 
-        // ROBUST CSV PARSER (Handles commas inside quotes correctly)
         const parseCSV = (text) => {
-            const arr = []; 
-            let quote = false;  // 'true' means we're inside a quoted field
-            let col = 0, row = 0;
-
-            for (let c = 0; c < text.length; c++) {
-                let cc = text[c], nc = text[c+1];        // Current character, next character
-                arr[row] = arr[row] || [];             // Create a new row if necessary
-                arr[row][col] = arr[row][col] || '';   // Create a new column (start with empty string) if necessary
-
-                if (cc == '"' && quote && nc == '"') { arr[row][col] += cc; ++c; }
-                else if (cc == '"') { quote = !quote; }
-                else if (cc == ',' && !quote) { ++col; }
-                else if (cc == '\r' && nc == '\n' && !quote) { ++row; col = 0; ++c; }
-                else if (cc == '\n' && !quote) { ++row; col = 0; }
-                else { arr[row][col] += cc; }
-            }
-            return arr;
+             const rows = []; let currentRow = [], currentCell = '', inQuotes = false;
+             for (let i = 0; i < text.length; i++) {
+                const char = text[i];
+                if (char === '"' && text[i+1] === '"') { currentCell += '"'; i++; }
+                else if (char === '"') inQuotes = !inQuotes;
+                else if (char === ',' && !inQuotes) { currentRow.push(currentCell.trim()); currentCell = ''; }
+                else if ((char === '\n' || char === '\r') && !inQuotes) {
+                    if (currentCell || currentRow.length) rows.push(currentRow);
+                    currentRow = []; currentCell = '';
+                } else currentCell += char;
+             }
+             if (currentCell || currentRow.length) { currentRow.push(currentCell.trim()); rows.push(currentRow); }
+             return rows;
         }
 
         const parseDateFlexible = (dateStr) => {
@@ -236,19 +234,37 @@
                     const siteMap = new Map();
                     const monthMap = new Map(); 
                     const weekMap = new Map();
+                    const categoryMap = new Map();
                     
                     const monthsOrder = ["Mei-Agustus", "Januari", "Februari", "Maret", "April", "Mei", "Juni", "Juli", "Agustus", "September", "Oktober", "November", "Desember"];
+                    
+                    // Reset Non SOH Data
+                    AppState.nonSohData = [];
 
                     rowsUtil.forEach(row => {
-                        // Check row length safely. If csv parser worked right, row[12] is Col M.
-                        // Col I (8) = Site, Col K (10) = Value, Col B (1) = Date, Col M (12) = Week
                         if(!row[8] || !row[10]) return;
-                        
                         const siteName = row[8].trim();
                         const siteKey = normalizeString(siteName); 
                         let cleanVal = row[10].replace(/[Rp\s.]/g, '').replace(',', '.');
                         const rowValue = parseFloat(cleanVal) || 0;
-                        const dateRaw = row[1];
+                        const dateRaw = row[1]; // Col B (Date)
+                        
+                        // Category Aggregation (Col L / Index 11)
+                        const categoryName = row[11] ? row[11].trim() : "Uncategorized";
+                        if (!categoryMap.has(categoryName)) categoryMap.set(categoryName, 0);
+                        categoryMap.set(categoryName, categoryMap.get(categoryName) + rowValue);
+
+                        // Capture Non SOH Data specifically
+                        if (categoryName.toLowerCase().includes("non soh")) {
+                            AppState.nonSohData.push({
+                                "Date": row[1] || "-",
+                                "Description": row[3] || "-", // Assuming D is Desc
+                                "Site": siteName,
+                                "Category": categoryName,
+                                "Amount": rowValue,
+                                "Week": row[12] || "-"
+                            });
+                        }
 
                         // 1. Site Aggregation (YTD)
                         if (siteMap.has(siteKey)) {
@@ -272,22 +288,16 @@
                         else monthData.sites.set(siteKey, { name: siteName, value: rowValue });
 
                         // 4. Week Aggregation
-                        // Priority: Col M (index 12) -> Date Calc -> Fallback
                         let weekNum = 0;
                         let weekRaw = (row[12] || "").toString().trim();
-                        
-                        // Try extract digit from "Week 1", "W1", "1", "01"
                         const weekMatch = weekRaw.match(/(\d+)/);
 
                         if (weekMatch) {
-                            weekNum = parseInt(weekMatch[0], 10);
+                            weekNum = parseInt(weekMatch[0]);
                         } else if (dateObj) {
-                            // Smart Fallback
                             weekNum = calculateWeekFromDate(dateObj);
                         }
 
-                        // Correction: If weekNum is 0, force it to 1 (Assume W1 if unknown)
-                        // Or if Month is Mei-Agustus, just group them.
                         if (weekNum === 0 && monthName !== "Mei-Agustus") weekNum = 1;
 
                         let weekKey = "";
@@ -302,10 +312,7 @@
                              const shortMonth = monthName.substring(0, 3);
                              weekKey = `W${weekNum}-${monthName}`;
                              weekLabel = `W${weekNum} ${shortMonth}`;
-                             
                              const mIdx = monthsOrder.indexOf(monthName);
-                             // Base 100 ensures Sep comes after Aug. Week num adds detail.
-                             // Mei-Agustus is idx 0. Sep is idx 9. 
                              const baseIdx = mIdx !== -1 ? mIdx * 10 : 990; 
                              sortOrder = baseIdx + weekNum;
                         }
@@ -351,9 +358,33 @@
                     newWeeklyData.forEach(d => { d.percentage = totalWeekly > 0 ? (d.value / totalWeekly * 100) : 0; });
                     AppState.weeklyBreakdown = newWeeklyData.sort((a,b) => a.sortOrder - b.sortOrder);
                     
+                    // Flatten Category Data (New YTD Breakdown)
+                    const newYtdBreakdown = Array.from(categoryMap.entries()).map(([name, val]) => ({
+                        name: name,
+                        value: val,
+                        percentage: (totalYTD > 0) ? (val / totalYTD * 100) : 0
+                    })).sort((a,b) => b.value - a.value);
+                    AppState.ytdBreakdown = newYtdBreakdown;
+
                     render(); // Re-render to update UI with fresh data
                 }
             } catch(e) { console.error("Utilization Fetch Error:", e); }
+        };
+
+        const downloadNonSohExcelAction = () => {
+            if (!AppState.nonSohData || AppState.nonSohData.length === 0) {
+                alert("No Non SOH data available to download.");
+                return;
+            }
+            
+            // Generate Excel
+            const worksheet = XLSX.utils.json_to_sheet(AppState.nonSohData);
+            const workbook = XLSX.utils.book_new();
+            XLSX.utils.book_append_sheet(workbook, worksheet, "Part Non SOH");
+            
+            // Format Filename
+            const date = new Date().toISOString().split('T')[0];
+            XLSX.writeFile(workbook, `Part_Non_SOH_Report_${date}.xlsx`);
         };
 
         const setMonthAction = (monthName) => {
@@ -449,7 +480,7 @@
         function renderHero() { return `<div id="home" class="relative h-screen flex items-center justify-center overflow-hidden bg-slate-900"><div class="absolute inset-0 z-0"><img src="https://images.unsplash.com/photo-1586528116311-ad8dd3c8310d?lib=rb-4.0.3&auto=format&fit=crop&w=2070&q=80" class="w-full h-full object-cover opacity-40"><div class="absolute inset-0 bg-gradient-to-r from-slate-900 via-slate-900/80 to-transparent"></div></div><div class="relative z-10 max-w-7xl mx-auto px-4 flex flex-col justify-center h-full"><div class="max-w-3xl"><div class="inline-flex items-center space-x-2 bg-orange-500/10 border border-orange-500/30 rounded-full px-4 py-1 mb-6 backdrop-blur-sm"><span class="flex h-2 w-2 rounded-full bg-orange-500 animate-pulse"></span><span class="text-orange-400 text-sm font-semibold tracking-wide uppercase">Operational Efficiency Optimized</span></div><h1 class="text-5xl md:text-7xl font-extrabold text-white leading-tight mb-6">The Central Nerve of <br/><span class="text-transparent bg-clip-text bg-gradient-to-r from-orange-400 to-orange-600">Mining Logistics</span></h1><p class="text-xl text-slate-300 mb-8 max-w-2xl leading-relaxed">DC Palaran serves as the premier Transit Hub and Buffer Stock Center, ensuring seamless inventory stability.</p><div class="flex flex-col sm:flex-row gap-4"><button onclick="window.nav('analysis')" class="px-8 py-4 bg-orange-500 hover:bg-orange-600 text-slate-900 font-bold rounded-sm shadow-lg flex items-center justify-center">Explore Capabilities <i data-lucide="arrow-right" class="ml-2 h-5 w-5"></i></button><button onclick="window.nav('dashboard')" class="px-8 py-4 border border-slate-500 bg-slate-800/50 backdrop-blur-md text-white font-bold rounded-sm hover:border-orange-500 hover:text-orange-400 flex items-center justify-center"><i data-lucide="activity" class="mr-2 h-5 w-5"></i> Live Dashboard</button></div></div></div></div>`; }
         function renderObjective() { return `<section class="py-20 bg-white"><div class="max-w-7xl mx-auto px-4 grid grid-cols-1 lg:grid-cols-2 gap-16 items-center"><div><h2 class="text-orange-500 font-bold uppercase tracking-widest text-sm mb-2">Our Core Mission</h2><h3 class="text-4xl font-bold text-slate-900 mb-6">Optimizing Inventory Utilization & Stabilization</h3><p class="text-slate-600 text-lg leading-relaxed mb-6">The primary objective of DC Palaran is to function as the stabilizing force across the entire supply chain.</p><ul class="space-y-4">${['Centralized Buffer Stock Management', 'Reduction of Site-Level Deadstock', 'Rapid Deployment to Satellite Projects'].map(item => `<li class="flex items-center text-slate-700 font-medium"><div class="mr-3 bg-slate-100 p-1 rounded-full text-orange-500"><i data-lucide="shield-check" class="h-5 w-5"></i></div>${item}</li>`).join('')}</ul></div><div class="relative"><div class="absolute -inset-4 bg-orange-100 rounded-xl transform rotate-2"></div><img src="https://images.unsplash.com/photo-1553413077-190dd305871c?ixlib=rb-4.0.3&auto=format&fit=crop&w=1035&q=80" class="relative rounded-lg shadow-2xl w-full object-cover h-96"></div></div></section>`; }
         function renderKeyFunctions() { return `<section id="functions" class="py-20 bg-slate-50"><div class="max-w-7xl mx-auto px-4 text-center mb-16"><h2 class="text-3xl md:text-4xl font-bold text-slate-900 mb-4">Key Operational Functions</h2><div class="w-24 h-1 bg-orange-500 mx-auto rounded-full"></div></div><div class="max-w-7xl mx-auto px-4 grid grid-cols-1 md:grid-cols-3 gap-8">${[{icon:'truck',t:'Strategic Transit Hub',d:'Primary consolidation point.'},{icon:'database',t:'Buffer Stock Center',d:'Managing volatility.'},{icon:'bar-chart-3',t:'Inventory Stabilization',d:'Control tower for MIN-MAX.'}].map(f=>`<div class="bg-white rounded-xl shadow-lg p-8 border-t-4 border-transparent hover:border-orange-500 transition-all"><div class="mb-6 bg-slate-50 w-20 h-20 rounded-full flex items-center justify-center"><i data-lucide="${f.icon}" class="h-10 w-10 text-orange-500"></i></div><h3 class="text-xl font-bold text-slate-900 mb-3">${f.t}</h3><p class="text-slate-600">${f.d}</p></div>`).join('')}</div></section>`; }
-        function renderCategories() { return `<section id="categories" class="py-20 bg-slate-900 text-white"><div class="max-w-7xl mx-auto px-4 mb-12"><h2 class="text-3xl font-bold mb-2">Material Categories</h2></div><div class="max-w-7xl mx-auto px-4 grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">${[{n:'Spare Parts',i:'settings',img:'1486262715619-67b85e0b08d3'},{n:'Tyres & Rims',i:'layers',img:'1583258509156-f28822026858'},{n:'Components',i:'cpu',img:'1580894732930-0babd100d356'},{n:'General Supplies',i:'box',img:'1595074474855-f9397f8ef5fd'}].map(c=>`<div class="group relative h-96 rounded-lg overflow-hidden cursor-pointer"><img src="https://images.unsplash.com/photo-${c.img}?auto=format&fit=crop&w=600&q=80" class="absolute inset-0 w-full h-full object-cover transition-transform duration-500 group-hover:scale-110"><div class="absolute inset-0 bg-gradient-to-t from-slate-900 via-slate-900/60 to-transparent opacity-90"></div><div class="absolute bottom-0 left-0 p-6 w-full"><div class="bg-orange-500 w-12 h-12 rounded-lg flex items-center justify-center mb-4"><i data-lucide="${c.i}" class="text-white w-6 h-6"></i></div><h3 class="text-xl font-bold mb-2 border-l-4 border-orange-500 pl-3">${c.name}</h3></div></div>`).join('')}</div></section>`; }
+        function renderCategories() { return `<section id="categories" class="py-20 bg-slate-900 text-white"><div class="max-w-7xl mx-auto px-4 mb-12"><h2 class="text-3xl font-bold mb-2">Material Categories</h2></div><div class="max-w-7xl mx-auto px-4 grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">${[{n:'Spare Parts',i:'settings',img:'1486262715619-67b85e0b08d3'},{n:'Tyres & Rims',i:'layers',img:'1583258509156-f28822026858'},{n:'Components',i:'cpu',img:'1580894732930-0babd100d356'},{n:'General Supplies',i:'box',img:'1595074474855-f9397f8ef5fd'}].map(c=>`<div class="group relative h-96 rounded-lg overflow-hidden cursor-pointer"><img src="https://images.unsplash.com/photo-${c.img}?auto=format&fit=crop&w=600&q=80" class="absolute inset-0 w-full h-full object-cover transition-transform duration-500 group-hover:scale-110"><div class="absolute inset-0 bg-gradient-to-t from-slate-900 via-slate-900/60 to-transparent opacity-90"></div><div class="absolute bottom-0 left-0 p-6 w-full"><div class="bg-orange-500 w-12 h-12 rounded-lg flex items-center justify-center mb-4"><i data-lucide="${c.i}" class="text-white w-6 h-6"></i></div><h3 class="text-xl font-bold mb-2 border-l-4 border-orange-500 pl-3">${c.n}</h3></div></div>`).join('')}</div></section>`; }
         function renderProcess() { return `<section id="process" class="py-20 bg-white"><div class="max-w-7xl mx-auto px-4 text-center mb-16"><h2 class="text-3xl font-bold text-slate-900">Operational Process Flow</h2></div><div class="max-w-7xl mx-auto px-4 relative"><div class="hidden md:block absolute top-1/2 left-0 w-full h-1 bg-slate-200 -translate-y-1/2 z-0"></div><div class="grid grid-cols-1 md:grid-cols-3 gap-12 relative z-10">${['Incoming & QC', 'Inventory Mgmt', 'Outgoing & Dispatch'].map((t,i) => `<div class="bg-white p-6 rounded-xl border border-slate-100 shadow-lg text-center"><div class="w-16 h-16 ${i===1?'bg-orange-500':'bg-slate-900'} text-white rounded-full flex items-center justify-center text-2xl font-bold mx-auto mb-6 ring-8 ring-white">${i+1}</div><h3 class="text-xl font-bold text-slate-800 mb-3">${t}</h3><p class="text-slate-500 text-sm">Critical procedures ensuring operational excellence.</p></div>`).join('')}</div></div></section>`; }
         function renderTrackingSection() { return `<section id="tracking" class="py-20 bg-slate-50 border-b border-slate-200"><div class="max-w-7xl mx-auto px-4"><div class="bg-white rounded-2xl shadow-xl overflow-hidden flex flex-col md:flex-row"><div class="md:w-5/12 bg-slate-900 p-10 text-white flex flex-col justify-center"><h2 class="text-3xl font-bold mb-4 flex items-center"><i data-lucide="search" class="mr-3 text-orange-500"></i> Track Shipment</h2><p class="text-slate-300">Monitor real-time status via STO Number.</p></div><div class="md:w-7/12 p-10"><form onsubmit="window.handleTrack(event)" class="mb-8"><label class="block text-sm font-bold text-slate-900 mb-2 uppercase">Enter STO Number</label><div class="flex gap-2"><input id="stoInput" type="text" placeholder="e.g. 450012345" class="flex-1 px-4 py-3 border border-slate-300 rounded-sm focus:ring-2 focus:ring-orange-500 outline-none"><button type="submit" class="bg-orange-500 text-white font-bold px-8 py-3 rounded-sm hover:bg-orange-600">Track</button></div></form><div id="trackingResult" class="hidden animate-in"></div></div></div><div id="pending-gr-container">${generatePendingGRHtml()}</div></div></section>`; }
         function renderContact() { return `<section id="contact" class="py-20 bg-slate-900 text-white"><div class="max-w-7xl mx-auto px-4 grid grid-cols-1 md:grid-cols-2 gap-16"><div><h2 class="text-3xl font-bold mb-6">Contact Control Tower</h2><div class="space-y-6"><div class="flex items-start"><i data-lucide="map-pin" class="w-6 h-6 text-orange-500 mr-4"></i><div><h4 class="font-bold">DC Palaran Main Hub</h4><p class="text-slate-400 text-sm">Jl. Trikora, Palaran, Samarinda</p></div></div><div class="flex items-center"><i data-lucide="phone" class="w-6 h-6 text-orange-500 mr-4"></i><div><h4 class="font-bold">Hotline</h4><p class="text-slate-400 text-sm">+62 811-555-0123</p></div></div></div></div><div class="bg-white rounded-lg p-8 text-slate-900"><h3 class="text-2xl font-bold text-slate-900 mb-6">Quick Stock Check</h3><form onsubmit="window.handleStockCheck(event)" class="space-y-4"><div><label class="block text-sm font-bold mb-2">Project Site</label><select name="site" class="w-full px-4 py-3 bg-slate-100 border-none rounded-sm"><option value="" disabled selected>Select Site...</option>${[{code: "PL01", name: "MSJ"}, {code: "PL03", name: "BE"}, {code: "PL06", name: "KALSEL"}, {code: "PL09", name: "MME"}, {code: "PL14", name: "TJP"}, {code: "PL15", name: "GAM"}, {code: "PL18", name: "ABP"}, {code: "PL19", name: "GSP"}, {code: "PL22", name: "MRW"}].map(p=>`<option value="${p.name} (${p.code})">${p.name} (${p.code})</option>`).join('')}</select></div><div><label class="block text-sm font-bold mb-2">Search By</label><div class="flex gap-4 mb-2"><label class="flex items-center space-x-2"><input type="radio" name="type" value="Material Number" checked><span>Material Number</span></label><label class="flex items-center space-x-2"><input type="radio" name="type" value="Part Number"><span>Part Number</span></label></div><input name="item" type="text" class="w-full px-4 py-3 bg-slate-100 border-none rounded-sm" placeholder="Enter Number..." required></div><button type="submit" class="w-full bg-green-600 text-white font-bold py-3 rounded-sm hover:bg-green-700 flex items-center justify-center"><i data-lucide="send" class="w-4 h-4 mr-2"></i> Check Stock via WhatsApp</button></form></div></div></section>`; }
@@ -551,6 +582,46 @@
                     </div>
                 </div>`;
             } else {
+                
+                // --- CUSTOM YTD BREAKDOWN CARD SECTION ---
+                // Only show this specific breakdown layout when in YTD View
+                let ytdBreakdownHTML = '';
+                if (view === 'YTD' && AppState.ytdBreakdown && AppState.ytdBreakdown.length > 0) {
+                     ytdBreakdownHTML = `
+                     <div class="mt-4 grid grid-cols-1 sm:grid-cols-3 gap-3 animate-in fade-in slide-in-from-bottom-2">
+                        ${AppState.ytdBreakdown.map((cat, idx) => {
+                            // Find specific colors or fallback
+                            let colorClass = "bg-slate-500";
+                            if (cat.name.includes("Non SOH")) colorClass = "bg-purple-500";
+                            else if (cat.name.includes("STO")) colorClass = "bg-orange-500";
+                            else if (cat.name.includes("TF")) colorClass = "bg-blue-500";
+                            else colorClass = "bg-emerald-500"; // Fallback
+
+                            return `
+                            <div class="bg-slate-800/50 rounded-lg p-3 border border-slate-700/50 flex flex-col justify-between hover:bg-slate-700/50 transition duration-300 relative group">
+                                <div class="flex justify-between items-start">
+                                    <span class="text-[10px] uppercase font-bold text-slate-400 tracking-wider truncate pr-2" title="${cat.name}">${cat.name}</span>
+                                    <div class="${colorClass} w-2 h-2 rounded-full"></div>
+                                </div>
+                                <div class="mt-2">
+                                    <span class="text-lg font-bold text-white tracking-tight block">${formatIDR(cat.value)}</span>
+                                    <span class="text-[10px] text-slate-500 font-medium">${cat.percentage.toFixed(1)}% of Total</span>
+                                </div>
+                                <div class="w-full bg-slate-700 h-1 mt-3 rounded-full overflow-hidden">
+                                    <div class="${colorClass} h-full rounded-full" style="width: ${cat.percentage}%"></div>
+                                </div>
+                                
+                                ${cat.name.includes("Non SOH") ? `
+                                <button onclick="window.downloadNonSohExcel()" class="absolute top-2 right-2 p-1.5 bg-slate-700 hover:bg-slate-600 rounded-md text-white opacity-0 group-hover:opacity-100 transition-opacity" title="Download Excel">
+                                    <i data-lucide="download" class="w-3 h-3"></i>
+                                </button>
+                                ` : ''}
+                            </div>
+                            `;
+                        }).join('')}
+                     </div>`;
+                }
+
                 topContentHTML = `
                 <div class="mb-8 animate-in">
                     <div class="bg-gradient-to-r from-slate-900 to-slate-800 border border-slate-700 rounded-2xl p-8 shadow-2xl relative overflow-hidden group">
@@ -563,6 +634,10 @@
                                 </div>
                                 <div class="hidden md:block bg-slate-800 p-4 rounded-xl border border-slate-700 shadow-lg"><i data-lucide="wallet" class="w-12 h-12 text-orange-500"></i></div>
                             </div>
+                            
+                            <!-- Insert Breakdown Cards Here -->
+                            ${ytdBreakdownHTML}
+
                             <div class="mt-4 flex items-center space-x-4 text-sm text-slate-400">
                                 <span class="bg-green-500/20 text-green-400 px-2 py-1 rounded flex items-center"><i data-lucide="arrow-up-right" class="w-3 h-3 mr-1"></i> Live Data</span>
                                 <span>${subText}</span>
@@ -641,7 +716,7 @@
                         </div>
                         <div class="space-y-8">
                             <div class="bg-white rounded-2xl shadow-xl overflow-hidden border border-slate-200 h-fit">
-                                <div class="p-6 bg-slate-50 border-b border-slate-200"><h3 class="text-lg font-bold text-slate-800 flex items-center"><i data-lucide="pie-chart" class="w-5 h-5 mr-2 text-blue-600"></i> ${view} Distribution (%)</h3></div>
+                                <div class="p-6 bg-slate-50 border-b border-slate-200"><h3 class="text-lg font-bold text-slate-800 flex items-center"><i data-lucide="pie-chart" class="w-5 h-5 mr-2 text-blue-600"></i> Distribution (%)</h3></div>
                                 <div class="p-8 flex flex-col items-center justify-center">${pieChartHTML}</div>
                             </div>
                             <div class="bg-white rounded-2xl shadow-xl overflow-hidden border border-slate-200 h-fit">
@@ -653,21 +728,8 @@
                 </div>
             </div>`;
         }
-        
-        function renderCatalog() {
-            const plantOptions = Array.from({length: 28}, (_, i) => `<option value="PL${String(i + 1).padStart(2, '0')}">PL${String(i + 1).padStart(2, '0')}</option>`).join('');
-            const storageLocOptions = Array.from({length: 15}, (_, i) => `<option value="S${String(i + 1).padStart(3, '0')}">S${String(i + 1).padStart(3, '0')}</option>`).join('');
-            const mtOpts = ["SPRT","FOGC","TIRE","CONS","GENS","ASET","SEJA","MDLE","BOMM","FFF"].map(c=>`<option value="${c}">${c}</option>`).join('');
-            const matGroups = ["S001", "S002", "S003", "S004", "S005", "S006", "F001", "F002", "F003", "F004", "T001", "G001", "G002", "C001", "C002", "C003", "C004", "C005", "C006", "C007", "A001", "A002", "A003", "A004", "A005", "A006", "J001", "J002", "J003", "J004", "J005", "J006", "J007", "J008", "J009", "J010", "J011", "J012", "J013", "J014", "J015", "M001"].map(c=>`<option value="${c}">${c}</option>`).join('');
-            const purchGroups = ["G01", "G02", "G03", "G04", "G05", "G06", "G07"].map(c=>`<option value="${c}">${c}</option>`).join('');
-            const valClasses = ["V001", "V002", "V003", "V004", "V005", "V006", "V007", "V008", "V009", "V010", "V011", "V012", "V013", "V014", "V015", "V016", "V017", "V018", "V019", "V020", "V021", "V022", "V023", "V024", "V025", "V026", "V027", "V028", "V029", "V030", "V031", "V032", "V033", "V034", "V035"].map(c=>`<option value="${c}">${c}</option>`).join('');
-            const lockedClass = AppState.isCatalogLocked ? "bg-slate-100 text-slate-400 cursor-not-allowed border-slate-200 master-data-field" : "";
-            const disabledAttr = AppState.isCatalogLocked ? "disabled" : "";
 
-            return `<div class="min-h-screen pt-24 pb-12 bg-slate-50 text-slate-900 animate-in"><div class="max-w-6xl mx-auto px-4"><button onclick="window.nav('home')" class="mb-6 flex items-center text-slate-500 hover:text-orange-600 font-medium text-sm"><i data-lucide="arrow-left" class="w-4 h-4 mr-2"></i> Back to Home</button><div class="bg-white rounded-xl shadow-xl overflow-hidden border border-slate-200"><div class="bg-slate-900 p-8 text-white"><h2 class="text-3xl font-bold mb-2 flex items-center"><i data-lucide="file-text" class="mr-3 text-orange-500"></i> New Material Request</h2><p class="text-slate-400">Formulir registrasi Master Data Material baru.</p></div><div class="p-8"><div class="bg-orange-50 border border-orange-200 rounded-lg p-6 mb-8"><div class="flex justify-between items-start"><div><h4 class="font-bold text-orange-800 mb-2 flex items-center"><i data-lucide="shield-check" class="w-5 h-5 mr-2"></i> Duplicate Check (ZERPD)</h4><p class="text-sm text-orange-700 mb-4">Upload file <strong>ZERPD.xlsx</strong> (Format: [Tanggal] ZERPD ALL SITE) untuk membuka formulir.</p></div>${AppState.isZerpdUploaded ? `<button onclick="window.deleteZerpdFile()" class="text-red-500 hover:text-red-700 flex items-center text-sm font-bold"><i data-lucide="trash-2" class="w-4 h-4 mr-1"></i> Remove File</button>` : ''}</div>${!AppState.isZerpdUploaded ? `<input type="file" accept=".xlsx" onchange="window.handleZerpdUpload(this)" class="block w-full text-sm text-slate-500 file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-sm file:font-semibold file:bg-orange-500 file:text-white hover:file:bg-orange-600"/>` : `<div class="text-sm font-bold text-green-600">ZERPD File Loaded. Ready to verify.</div>`}<div id="zerpdStatus" class="text-sm font-bold text-slate-400 mt-2">Waiting for file...</div></div><form onsubmit="window.handleCatalogSubmit(event)" class="space-y-8"><div class="bg-slate-50 p-6 rounded-lg border border-slate-200"><h4 class="font-bold text-slate-800 mb-4 pb-2 border-b border-slate-300 flex items-center"><i data-lucide="user" class="w-4 h-4 mr-2 text-orange-500"></i> Requester Information</h4><div class="grid grid-cols-1 md:grid-cols-2 gap-6"><div><label class="block text-xs font-bold text-slate-500 uppercase mb-1">Requester Name</label><input required name="requester_name" type="text" class="w-full px-3 py-2 border border-slate-300 rounded focus:ring-2 focus:ring-orange-500 outline-none"></div><div><label class="block text-xs font-bold text-slate-500 uppercase mb-1">Department</label><input required name="department" type="text" class="w-full px-3 py-2 border border-slate-300 rounded focus:ring-2 focus:ring-orange-500 outline-none"></div></div></div><div class="bg-blue-50 p-6 rounded-lg border border-blue-200"><h4 class="font-bold text-blue-900 mb-4 pb-2 border-b border-blue-300 flex items-center"><i data-lucide="search" class="w-4 h-4 mr-2"></i> Part Number Verification</h4><div class="grid grid-cols-1 md:grid-cols-2 gap-4"><div class="relative"><label class="block text-xs font-bold text-slate-500 uppercase mb-1">Manufacturing Part Number</label><div class="flex gap-2"><input id="inputMPN" name="manuf_part_number" disabled type="text" class="w-full px-3 py-2 border border-slate-300 rounded focus:ring-2 focus:ring-blue-500 outline-none ${!AppState.isZerpdUploaded?'bg-slate-100 cursor-not-allowed':''}" placeholder="Upload ZERPD first..."><button type="button" onclick="window.checkPartNumber()" ${!AppState.isZerpdUploaded ? 'disabled' : ''} class="bg-blue-600 text-white px-6 py-2 rounded text-xs font-bold hover:bg-blue-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed" id="btnVerifyMPN" disabled>VERIFY</button></div></div><div class="flex items-center"><p id="mpnStatus" class="text-sm font-bold ml-2"></p></div><div class="md:col-span-2 hidden" id="duplicateWarning"><div class="bg-red-100 border-l-4 border-red-500 text-red-700 p-4 rounded shadow-sm"><div class="flex items-start"><i data-lucide="alert-triangle" class="w-5 h-5 mr-2 mt-0.5"></i><div><p class="font-bold">Mohon pastikan kembali PN dikarenakan PN sdh terdaftar di ZERPD</p><p class="text-sm mt-1">Existing Match: <span id="existingMPNDisplay" class="font-mono bg-red-200 px-1 rounded"></span> (Material: <span id="existingMatDisplay" class="font-mono"></span>)</p></div></div></div></div></div></div><div><h4 class="font-bold text-slate-800 mb-4 flex items-center"><i data-lucide="box" class="w-4 h-4 mr-2 text-orange-500"></i> 1. Basic Material Data</h4><div class="grid grid-cols-1 md:grid-cols-3 gap-4"><div class="md:col-span-3"><label class="block text-xs font-bold text-slate-500 uppercase mb-1">Description</label><input required ${disabledAttr} name="description" type="text" class="w-full px-3 py-2 border border-slate-300 rounded outline-none ${lockedClass}" placeholder="Material Description"></div><div><label class="block text-xs font-bold text-slate-500 uppercase mb-1">Old Material</label><input ${disabledAttr} name="old_material" type="text" class="w-full px-3 py-2 border border-slate-300 rounded outline-none ${lockedClass}"></div><div><label class="block text-xs font-bold text-slate-500 uppercase mb-1">Type</label><select ${disabledAttr} name="mat_type" class="w-full px-3 py-2 border border-slate-300 rounded outline-none ${lockedClass}"><option value="">Select...</option>${mtOpts}</select></div><div><label class="block text-xs font-bold text-slate-500 uppercase mb-1">Group</label><select ${disabledAttr} name="mat_group" class="w-full px-3 py-2 border border-slate-300 rounded outline-none ${lockedClass}"><option value="">Select...</option>${matGroups}</select></div><div><label class="block text-xs font-bold text-slate-500 uppercase mb-1">Plant</label><select required ${disabledAttr} name="plant" class="w-full px-3 py-2 border border-slate-300 rounded outline-none ${lockedClass}"><option value="">Select...</option>${plantOptions}</select></div><div><label class="block text-xs font-bold text-slate-500 uppercase mb-1">Base UoM</label><input ${disabledAttr} name="base_uom" class="w-full px-3 py-2 border border-slate-300 rounded outline-none ${lockedClass}"></div></div></div><div><h4 class="font-bold text-slate-800 mb-4 flex items-center"><i data-lucide="settings" class="w-4 h-4 mr-2 text-orange-500"></i> 2. Mfg & Purchasing</h4><div class="grid grid-cols-1 md:grid-cols-3 gap-4"><div><label class="block text-xs font-bold text-slate-500 uppercase mb-1">Part Profile</label><input ${disabledAttr} name="manuf_profile" class="w-full px-3 py-2 border border-slate-300 rounded outline-none ${lockedClass}"></div><div><label class="block text-xs font-bold text-slate-500 uppercase mb-1">Purch Group</label><select ${disabledAttr} name="purch_group" class="w-full px-3 py-2 border border-slate-300 rounded outline-none ${lockedClass}"><option value="">Select...</option>${purchGroups}</select></div><div><label class="block text-xs font-bold text-slate-500 uppercase mb-1">Auto PO</label><select ${disabledAttr} name="auto_po" class="w-full px-3 py-2 border border-slate-300 rounded outline-none ${lockedClass}"><option>Yes</option><option>No</option></select></div></div></div><div><h4 class="font-bold text-slate-800 mb-4 flex items-center"><i data-lucide="bar-chart-2" class="w-4 h-4 mr-2 text-orange-500"></i> 3. MRP</h4><div class="grid grid-cols-1 md:grid-cols-4 gap-4"><div><label class="block text-xs font-bold text-slate-500 uppercase mb-1">MRP Type</label><input ${disabledAttr} value="ND" class="w-full px-3 py-2 border border-slate-300 rounded outline-none ${lockedClass}" readonly></div><div><label class="block text-xs font-bold text-slate-500 uppercase mb-1">Controller</label><input ${disabledAttr} value="M01" class="w-full px-3 py-2 border border-slate-300 rounded outline-none ${lockedClass}" readonly></div><div><label class="block text-xs font-bold text-slate-500 uppercase mb-1">Reorder</label><input ${disabledAttr} value="0" class="w-full px-3 py-2 border border-slate-300 rounded outline-none ${lockedClass}" readonly></div><div><label class="block text-xs font-bold text-slate-500 uppercase mb-1">Lot Size</label><input ${disabledAttr} name="lot" class="w-full px-3 py-2 border border-slate-300 rounded outline-none ${lockedClass}"></div></div></div><div><h4 class="font-bold text-slate-800 mb-4 flex items-center"><i data-lucide="warehouse" class="w-4 h-4 mr-2 text-orange-500"></i> 4. Storage</h4><div class="grid grid-cols-1 md:grid-cols-3 gap-4"><div><label class="block text-xs font-bold text-slate-500 uppercase mb-1">Valuation Class</label><select ${disabledAttr} name="val_class" class="w-full px-3 py-2 border border-slate-300 rounded outline-none ${lockedClass}"><option value="">Select...</option>${valClasses}</select></div><div><label class="block text-xs font-bold text-slate-500 uppercase mb-1">Storage Loc</label><select ${disabledAttr} name="sloc" class="w-full px-3 py-2 border border-slate-300 rounded outline-none ${lockedClass}"><option value="">Select...</option>${storageLocOptions}</select></div><div><label class="block text-xs font-bold text-slate-500 uppercase mb-1">Bin</label><input ${disabledAttr} name="bin" class="w-full px-3 py-2 border border-slate-300 rounded outline-none ${lockedClass}"></div></div></div><div class="pt-6 border-t border-slate-200"><button type="submit" ${disabledAttr} class="w-full bg-orange-500 hover:bg-orange-600 text-white font-bold py-4 rounded-md shadow-lg flex justify-center items-center text-lg disabled:bg-slate-300 disabled:shadow-none disabled:cursor-not-allowed">${AppState.isCatalogLocked ? `<i data-lucide="lock" class="w-5 h-5 mr-2"></i> Verify MPN to Unlock` : `<i data-lucide="send" class="w-5 h-5 mr-2"></i> Submit Request`}</button></div></form></div></div></div></div>`;
-        }
-
-        // --- 6. RENDER MAIN (Define render function here) ---
+        // --- 7. MAIN RENDER FUNCTION ---
         function render() {
             const root = document.getElementById('app-root');
             root.innerHTML = '';
@@ -694,21 +756,22 @@
             renderIcons();
 
             if (AppState.currentView === 'catalog' && AppState.isZerpdUploaded) {
-               const inputMPN = document.getElementById('inputMPN');
-               if (inputMPN) { inputMPN.disabled = false; inputMPN.classList.remove('bg-slate-100', 'cursor-not-allowed'); }
-               const btnVerify = document.getElementById('btnVerifyMPN');
-               if (btnVerify) { btnVerify.disabled = false; btnVerify.classList.remove('opacity-50', 'cursor-not-allowed'); }
-               const delBtn = document.getElementById('deleteZerpdBtn');
-               if(delBtn) delBtn.classList.remove('hidden');
-               const stat = document.getElementById('zerpdStatus');
-               if(stat) { stat.textContent = "ZERPD File Loaded. Ready."; stat.className = "text-sm font-bold text-green-600"; }
-               const upContainer = document.getElementById('zerpdUploadContainer');
-               if(upContainer) upContainer.classList.add('hidden');
+                const inputMPN = document.getElementById('inputMPN');
+                if (inputMPN) { 
+                    inputMPN.disabled = false; 
+                    inputMPN.classList.remove('bg-slate-100', 'cursor-not-allowed'); 
+                }
+                const btnVerify = document.getElementById('btnVerifyMPN');
+                if (btnVerify) { 
+                    btnVerify.disabled = false; 
+                    btnVerify.classList.remove('opacity-50', 'cursor-not-allowed'); 
+                }
+                document.getElementById('deleteZerpdBtn')?.classList.remove('hidden');
+                document.getElementById('zerpdUploadContainer')?.classList.add('hidden');
             }
         }
 
-        // --- 7. ASSIGN TO WINDOW ---
-        // Explicitly attach local functions to window object for HTML event handlers
+        // --- 8. ATTACH TO WINDOW ---
         window.setMonth = setMonthAction;
         window.clearMonth = clearMonthAction;
         window.setWeeklyDrill = setWeeklyDrillAction;
@@ -725,17 +788,10 @@
         window.handleZerpdUpload = handleZerpdUploadAction;
         window.deleteZerpdFile = deleteZerpdFileAction;
         window.checkPartNumber = checkPartNumberAction;
-        window.lockFields = lockFieldsAction;
-        window.unlockFields = unlockFieldsAction;
         window.handleCatalogSubmit = handleCatalogSubmitAction;
-        window.fetchDashboardData = fetchDashboardDataAction;
+        window.downloadNonSohExcel = downloadNonSohExcelAction; // NEW ACTION
 
-        // --- Initialization ---
-        if(isFirebaseAvailable && auth) {
-            onAuthStateChanged(auth, (u) => currentUser = u);
-            signInAnonymously(auth).catch(err => console.warn("Auto-login skipped:", err));
-        }
-        
+        // --- 9. INIT ---
         render();
 
     </script>
