@@ -92,7 +92,12 @@
             nonSohData: [], 
             pendingGR: [],
             sliderIndex: 0,
-            sliderInterval: null
+            sliderInterval: null,
+            // New States for Construction 4M1E
+            constructionUnlocked: false,
+            constructionData: [],
+            constructionLoading: false,
+            constructionError: null
         };
 
         // --- 3. UTILITIES ---
@@ -195,6 +200,31 @@
             return `<div class="relative flex justify-center items-center"><svg viewBox="-1 -1 2 2" width="${size}" height="${size}" style="transform: rotate(-90deg)">${paths}<circle cx="0" cy="0" r="0.6" fill="white" /></svg><div class="absolute inset-0 flex flex-col items-center justify-center text-slate-800"><span class="text-[10px] font-bold uppercase text-slate-400">${centerText}</span><span class="text-xs font-extrabold">${centerValue || formatIDR(total).replace('Rp', '')}</span></div></div>`;
         };
 
+        const generateCircularProgress = (percentage, color, label, icon) => {
+            const size = 100;
+            const strokeWidth = 8;
+            const radius = (size - strokeWidth) / 2;
+            const circumference = radius * 2 * Math.PI;
+            const offset = circumference - (percentage / 100) * circumference;
+            
+            return `
+            <div class="flex flex-col items-center justify-center p-4 bg-slate-800 rounded-xl shadow-lg border border-slate-700 w-full">
+                <div class="relative w-24 h-24 mb-3">
+                    <svg class="w-full h-full transform -rotate-90">
+                        <circle cx="${size/2}" cy="${size/2}" r="${radius}" stroke="currentColor" stroke-width="${strokeWidth}" fill="transparent" class="text-slate-700" />
+                        <circle cx="${size/2}" cy="${size/2}" r="${radius}" stroke="${color}" stroke-width="${strokeWidth}" fill="transparent" stroke-dasharray="${circumference}" stroke-dashoffset="${offset}" stroke-linecap="round" class="transition-all duration-1000 ease-out" />
+                    </svg>
+                    <div class="absolute inset-0 flex items-center justify-center text-white">
+                        <i data-lucide="${icon}" class="w-8 h-8 opacity-80"></i>
+                    </div>
+                </div>
+                <div class="text-center">
+                    <span class="block text-2xl font-bold text-white">${percentage.toFixed(1)}%</span>
+                    <span class="text-xs font-bold uppercase tracking-wider text-slate-400">${label}</span>
+                </div>
+            </div>`;
+        };
+
         const generateReportData = () => [];
 
         // --- 4. DATA LOGIC & ACTIONS ---
@@ -256,11 +286,10 @@
                     rowsUtil.forEach(row => {
                         if(!row[8] || !row[10]) return;
                         
-                        // --- SITE NAME NORMALIZATION LOGIC ---
+                        // Site Normalization
                         let siteName = row[8].trim();
                         const upperSite = siteName.toUpperCase();
                         
-                        // Specific Overrides
                         if (upperSite.includes("PL08") || upperSite.includes("DC PALARAN")) {
                             siteName = "CMX PLRN";
                         } else if (upperSite.includes("PL26") || upperSite.includes("MHU")) {
@@ -270,38 +299,30 @@
                         } else if (upperSite.includes("PL04") || upperSite.includes("AGM")) {
                             siteName = "AGM";
                         } else {
-                            // General Pattern: "PLxx (SITE)" -> "SITE"
-                            // Extracts content inside parenthesis if preceded by PLxx
                             const match = siteName.match(/PL\d+\s*\(([^)]+)\)/i);
                             if (match && match[1]) {
                                 siteName = match[1].trim();
                             }
                         }
-                        // -------------------------------------
 
                         const siteKey = normalizeString(siteName); 
                         let cleanVal = row[10].replace(/[Rp\s.]/g, '').replace(',', '.');
                         const rowValue = parseFloat(cleanVal) || 0;
                         const dateRaw = row[idxDate]; 
                         
-                        // --- CATEGORY NORMALIZATION LOGIC ---
+                        // Category Normalization
                         let categoryName = row[11] ? row[11].trim() : "Uncategorized";
                         const lowerCat = categoryName.toLowerCase();
 
-                        // Merge "Non SOH" and "Part Non SOH by sistem" into "Part Non SOH"
                         if (lowerCat.includes("non soh")) {
                             categoryName = "Part Non SOH";
-                        } 
-                        // Merge "TF Posting", "TF Post" into "TF Posting"
-                        else if (lowerCat.includes("tf post") || lowerCat.includes("tf posting")) {
+                        } else if (lowerCat.includes("tf post") || lowerCat.includes("tf posting")) {
                             categoryName = "TF Posting";
                         }
-                        // -------------------------------------
 
                         if (!categoryMap.has(categoryName)) categoryMap.set(categoryName, 0);
                         categoryMap.set(categoryName, categoryMap.get(categoryName) + rowValue);
 
-                        // Capture Non SOH Data
                         if (categoryName === "Part Non SOH") {
                             AppState.nonSohData.push({
                                 "Date": row[1] || "-",
@@ -313,19 +334,18 @@
                             });
                         }
 
-                        // 1. Site Aggregation (YTD)
+                        // Site Aggregation
                         if (siteMap.has(siteKey)) {
                             siteMap.get(siteKey).totalValue += rowValue;
                         } else {
                             siteMap.set(siteKey, { name: siteName, totalValue: rowValue });
                         }
 
-                        // 2. Month Resolution
+                        // Month Aggregation
                         let monthName = getMonthName(dateRaw);
                         let dateObj = parseDateFlexible(dateRaw);
                         if (!monthName || monthName === "Unknown") monthName = "Mei-Agustus";
 
-                        // 3. Month Aggregation
                         if (!monthMap.has(monthName)) {
                             monthMap.set(monthName, { total: 0, sites: new Map() });
                         }
@@ -334,7 +354,7 @@
                         if (monthData.sites.has(siteKey)) monthData.sites.get(siteKey).value += rowValue;
                         else monthData.sites.set(siteKey, { name: siteName, value: rowValue });
 
-                        // 4. Week Aggregation
+                        // Week Aggregation
                         let weekNum = 0;
                         let weekRaw = (row[idxWeek] || "").toString().trim();
                         const weekMatch = weekRaw.match(/(\d+)/);
@@ -420,6 +440,48 @@
             XLSX.utils.book_append_sheet(workbook, worksheet, "Part Non SOH");
             const date = new Date().toISOString().split('T')[0];
             XLSX.writeFile(workbook, `Part_Non_SOH_Report_${date}.xlsx`);
+        };
+
+        const handleUnlockConstructionAction = (e) => {
+            e.preventDefault();
+            const input = document.getElementById('constructionPass').value;
+            if (input === 'DCPLRNPL28') {
+                AppState.constructionUnlocked = true;
+                fetchConstructionDataAction();
+            } else {
+                alert("Access Denied: Invalid Security Code");
+            }
+        };
+
+        const fetchConstructionDataAction = async () => {
+            AppState.constructionLoading = true;
+            render();
+            try {
+                // Use CSV output for better parsing
+                const url = 'https://docs.google.com/spreadsheets/d/e/2PACX-1vTZK0dDiKAxHBY-b35pfvDEVBj_WhLq65G6C-9-XR3U5U3MuWBM3jcbtDkEWSVrFfH2WAttLPcG5PUC/pub?gid=1803529203&single=true&output=csv';
+                const response = await fetch(url);
+                if (response.ok) {
+                    const text = await response.text();
+                    const rows = parseCSV(text);
+                    // Headers likely on row 0. Data starts row 1.
+                    // Columns: B=4M1E(idx 1), C=Fase(idx 2), D=Activity(idx 3), L=Achievement(idx 11)
+                    
+                    const data = rows.slice(1).map(r => ({
+                        category: r[1] ? r[1].trim() : 'Unknown',
+                        phase: r[2] ? r[2].trim() : '-',
+                        activity: r[3] ? r[3].trim() : '-',
+                        achievement: r[11] ? parseFloat(r[11].replace('%', '').replace(',', '.')) : 0
+                    })).filter(d => d.category !== 'Unknown' && d.activity !== '-');
+
+                    AppState.constructionData = data;
+                }
+            } catch (e) {
+                console.error("Construction Fetch Error:", e);
+                AppState.constructionError = "Failed to load project data.";
+            } finally {
+                AppState.constructionLoading = false;
+                render();
+            }
         };
 
         // Slider Logic
@@ -645,8 +707,120 @@
                 <div class="mb-16">
                     <div class="text-center mb-10"><h3 class="text-3xl font-bold text-slate-800">Organizational Structure</h3><div class="w-20 h-1 bg-orange-500 mx-auto mt-4 rounded-full"></div></div>
                     <div class="flex flex-col items-center gap-8"><div class="flex flex-col items-center animate-in" style="animation-delay: 0.1s;"><div class="bg-white border-l-4 border-orange-500 shadow-lg rounded-lg p-6 w-64 text-center transform hover:scale-105 transition-all"><div class="w-20 h-20 bg-slate-200 rounded-full mx-auto mb-4 overflow-hidden border-2 border-orange-500"><img src="https://ui-avatars.com/api/?name=Kepala+DC&background=random" class="w-full h-full object-cover"></div><h4 class="font-bold text-lg text-slate-800">Head of DC Name</h4><p class="text-orange-600 text-sm font-bold uppercase">Warehouse Manager</p></div><div class="h-8 w-0.5 bg-slate-300"></div></div><div class="flex gap-8 flex-wrap justify-center relative"><div class="absolute -top-8 left-1/2 -translate-x-1/2 w-3/4 h-8 border-t-2 border-r-2 border-l-2 border-slate-300 rounded-t-xl -z-10"></div><div class="bg-white border-t-4 border-blue-500 shadow-md rounded-lg p-5 w-56 text-center animate-in" style="animation-delay: 0.2s;"><div class="w-16 h-16 bg-slate-100 rounded-full mx-auto mb-3 overflow-hidden"><img src="https://ui-avatars.com/api/?name=Admin+Logistik&background=random" class="w-full h-full object-cover"></div><h4 class="font-bold text-md text-slate-800">Admin Name</h4><p class="text-slate-500 text-xs uppercase">Logistics Admin</p></div><div class="bg-white border-t-4 border-green-500 shadow-md rounded-lg p-5 w-56 text-center animate-in" style="animation-delay: 0.3s;"><div class="w-16 h-16 bg-slate-100 rounded-full mx-auto mb-3 overflow-hidden"><img src="https://ui-avatars.com/api/?name=Supervisor+Ops&background=random" class="w-full h-full object-cover"></div><h4 class="font-bold text-md text-slate-800">Supervisor Name</h4><p class="text-slate-500 text-xs uppercase">Ops Supervisor</p></div><div class="bg-white border-t-4 border-purple-500 shadow-md rounded-lg p-5 w-56 text-center animate-in" style="animation-delay: 0.4s;"><div class="w-16 h-16 bg-slate-100 rounded-full mx-auto mb-3 overflow-hidden"><img src="https://ui-avatars.com/api/?name=Staff+Gudang&background=random" class="w-full h-full object-cover"></div><h4 class="font-bold text-md text-slate-800">Staff Name</h4><p class="text-slate-500 text-xs uppercase">Warehouse Staff</p></div></div></div></div>`;
-            const timelineHTML = `<div class="bg-slate-900 rounded-2xl p-10 text-white"><div class="text-center mb-10"><h3 class="text-3xl font-bold">DC Construction Progress</h3><p class="text-slate-400 mt-2">The journey from concept to operations</p></div><div class="relative border-l-2 border-slate-700 ml-4 md:ml-10 space-y-12"><div class="relative pl-8 md:pl-12 group"><div class="absolute -left-[9px] top-0 w-5 h-5 bg-orange-500 rounded-full border-4 border-slate-900 group-hover:scale-125 transition-transform"></div><span class="text-orange-400 font-mono text-sm mb-1 block">Januari 2024</span><h4 class="text-xl font-bold mb-2">Planning & Ground Breaking</h4><p class="text-slate-400 text-sm leading-relaxed">Initial planning phase, licensing, and groundbreaking at Palaran site.</p></div><div class="relative pl-8 md:pl-12 group"><div class="absolute -left-[9px] top-0 w-5 h-5 bg-slate-600 rounded-full border-4 border-slate-900 group-hover:bg-blue-500 transition-colors"></div><span class="text-slate-500 font-mono text-sm mb-1 block">Maret 2024</span><h4 class="text-xl font-bold mb-2">Main Structure Construction</h4><p class="text-slate-400 text-sm leading-relaxed">Steel piling, roof framing, and heavy-duty floor casting.</p></div><div class="relative pl-8 md:pl-12 group"><div class="absolute -left-[9px] top-0 w-5 h-5 bg-slate-600 rounded-full border-4 border-slate-900 group-hover:bg-green-500 transition-colors"></div><span class="text-slate-500 font-mono text-sm mb-1 block">Mei 2024</span><h4 class="text-xl font-bold mb-2">System & Racking Installation</h4><p class="text-slate-400 text-sm leading-relaxed">Racking system installation, electrical, CCTV, and network setup.</p></div><div class="relative pl-8 md:pl-12 group"><div class="absolute -left-[9px] top-0 w-5 h-5 bg-green-500 rounded-full border-4 border-slate-900 shadow-[0_0_15px_rgba(34,197,94,0.5)]"></div><span class="text-green-400 font-mono text-sm mb-1 block">Juni 2024 - Now</span><h4 class="text-xl font-bold mb-2">Go Live & Full Operations</h4><p class="text-slate-400 text-sm leading-relaxed">DC Palaran officially operates as the main hub serving all sites.</p></div></div></div>`;
-            return `<div class="min-h-screen pt-24 pb-12 bg-slate-50 animate-in"><div class="max-w-6xl mx-auto px-4"><button onclick="window.nav('home')" class="mb-6 flex items-center text-slate-500 hover:text-orange-600 font-medium text-sm"><i data-lucide="arrow-left" class="w-4 h-4 mr-2"></i> Back to Home</button>${sliderHTML}${orgChartHTML}${timelineHTML}</div></div>`;
+            
+            // --- CONSTRUCTION PROGRESS LOGIC ---
+            let constructionHTML = '';
+            if (!AppState.constructionUnlocked) {
+                constructionHTML = `
+                <div class="bg-slate-900 rounded-2xl p-10 text-white shadow-2xl border border-slate-700">
+                    <div class="flex flex-col items-center justify-center text-center">
+                        <div class="bg-slate-800 p-4 rounded-full mb-6 border border-slate-600"><i data-lucide="lock" class="w-8 h-8 text-orange-500"></i></div>
+                        <h3 class="text-2xl font-bold mb-2">Restricted Access: Project Control</h3>
+                        <p class="text-slate-400 mb-6 max-w-md">Please enter the security code to access the 4M1E Construction Progress Dashboard.</p>
+                        <form onsubmit="window.handleUnlockConstruction(event)" class="flex w-full max-w-sm">
+                            <input id="constructionPass" type="password" placeholder="Enter Access Code" class="flex-1 px-4 py-3 bg-slate-800 border border-slate-600 rounded-l text-white outline-none focus:border-orange-500">
+                            <button type="submit" class="bg-orange-500 hover:bg-orange-600 text-white px-6 py-3 font-bold rounded-r transition-colors">UNLOCK</button>
+                        </form>
+                    </div>
+                </div>`;
+            } else {
+                if (AppState.constructionLoading) {
+                    constructionHTML = `<div class="p-10 text-center text-slate-500 bg-white rounded-xl"><i data-lucide="loader-2" class="animate-spin inline mr-2"></i> Loading Project Data...</div>`;
+                } else if (AppState.constructionError) {
+                    constructionHTML = `<div class="p-10 text-center text-red-500 bg-red-50 rounded-xl border border-red-200">Error: ${AppState.constructionError}</div>`;
+                } else {
+                    // 1. Process Data for 4M1E Charts (Top Section)
+                    const categories = ['MAN', 'MACHINE', 'METHOD', 'MATERIAL', 'ENVIRONMENT'];
+                    const icons = { 'MAN': 'users', 'MACHINE': 'cogs', 'METHOD': 'file-text', 'MATERIAL': 'box', 'ENVIRONMENT': 'sun' };
+                    const colors = { 'MAN': '#3b82f6', 'MACHINE': '#f97316', 'METHOD': '#10b981', 'MATERIAL': '#a855f7', 'ENVIRONMENT': '#ef4444' };
+                    
+                    const chartData = categories.map(cat => {
+                        const items = AppState.constructionData.filter(d => d.category.toUpperCase().includes(cat));
+                        const avg = items.length > 0 ? items.reduce((a, b) => a + b.achievement, 0) / items.length : 0;
+                        return { label: cat, value: avg, icon: icons[cat] || 'activity', color: colors[cat] || '#cbd5e1' };
+                    });
+
+                    const chartsHTML = `
+                        <div class="grid grid-cols-2 md:grid-cols-5 gap-4 mb-12">
+                            ${chartData.map(d => generateCircularProgress(d.value, d.color, d.label, d.icon)).join('')}
+                        </div>
+                    `;
+
+                    // 2. Process Data for Phase Breakdown (Bottom Table)
+                    // Group by Phase (Column C) instead of 4M1E
+                    const distinctPhases = [...new Set(AppState.constructionData.map(item => item.phase))];
+                    
+                    // Create aggregated summary data
+                    const phaseSummaryData = distinctPhases.map(phaseName => {
+                        const phaseItems = AppState.constructionData.filter(d => d.phase === phaseName);
+                        // Calculate Average Achievement for the Phase
+                        const avgAch = phaseItems.length > 0 
+                            ? phaseItems.reduce((sum, item) => sum + item.achievement, 0) / phaseItems.length 
+                            : 0;
+                        
+                        return {
+                            name: phaseName,
+                            avgAchievement: avgAch,
+                            itemCount: phaseItems.length
+                        };
+                    }).sort((a,b) => b.avgAchievement - a.avgAchievement); // Optional: sort by progress
+
+                    // Generate Summary Table HTML
+                    let detailHTML = `
+                    <div class="bg-white rounded-2xl shadow-xl overflow-hidden border border-slate-200">
+                        <div class="p-6 bg-slate-50 border-b border-slate-200 flex justify-between items-center">
+                            <h4 class="font-bold text-slate-800 text-lg flex items-center">
+                                <i data-lucide="list" class="w-5 h-5 mr-3 text-orange-600"></i> Phase Execution Status
+                            </h4>
+                            <span class="text-xs bg-slate-200 text-slate-600 px-3 py-1 rounded-full font-bold">Consolidated View</span>
+                        </div>
+                        <div class="overflow-x-auto">
+                            <table class="w-full text-sm text-left">
+                                <thead class="bg-slate-100 text-slate-600 font-bold uppercase text-xs">
+                                    <tr>
+                                        <th class="px-6 py-4 w-1/3">Project Phase</th>
+                                        <th class="px-6 py-4 w-1/2">Overall Completion</th>
+                                        <th class="px-6 py-4 text-right">Avg %</th>
+                                    </tr>
+                                </thead>
+                                <tbody class="divide-y divide-slate-100">
+                                    ${phaseSummaryData.map(phase => `
+                                    <tr class="hover:bg-slate-50 transition-colors group">
+                                        <td class="px-6 py-5">
+                                            <div class="font-bold text-slate-800 text-base">${phase.name}</div>
+                                            <div class="text-xs text-slate-400 mt-1">${phase.itemCount} Sub-activities tracked</div>
+                                        </td>
+                                        <td class="px-6 py-5 align-middle">
+                                            <div class="w-full bg-slate-200 rounded-full h-4 overflow-hidden shadow-inner">
+                                                <div class="bg-gradient-to-r from-orange-400 to-orange-600 h-full rounded-full transition-all duration-1000 ease-out relative" style="width: ${phase.avgAchievement}%">
+                                                    <div class="absolute inset-0 bg-white/20 animate-pulse"></div>
+                                                </div>
+                                            </div>
+                                        </td>
+                                        <td class="px-6 py-5 text-right font-mono text-lg font-bold ${phase.avgAchievement >= 100 ? 'text-green-600' : 'text-slate-700'}">
+                                            ${phase.avgAchievement.toFixed(1)}%
+                                        </td>
+                                    </tr>
+                                    `).join('')}
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>`;
+
+                    constructionHTML = `
+                    <div class="animate-in">
+                        <div class="text-center mb-10">
+                            <h3 class="text-3xl font-extrabold text-slate-900">Project Execution Dashboard (4M1E)</h3>
+                            <p class="text-slate-500 mt-2">Executive Summary & Operational Phase Breakdown</p>
+                            <div class="w-24 h-1 bg-orange-500 mx-auto mt-4 rounded-full"></div>
+                        </div>
+                        ${chartsHTML}
+                        ${detailHTML}
+                    </div>`;
+                }
+            }
+
+            return `<div class="min-h-screen pt-24 pb-12 bg-slate-50 animate-in"><div class="max-w-6xl mx-auto px-4"><button onclick="window.nav('home')" class="mb-6 flex items-center text-slate-500 hover:text-orange-600 font-medium text-sm"><i data-lucide="arrow-left" class="w-4 h-4 mr-2"></i> Back to Home</button>${sliderHTML}${orgChartHTML}${constructionHTML}</div></div>`;
         }
 
         function renderDashboard() {
@@ -946,7 +1120,8 @@
         window.deleteZerpdFile = deleteZerpdFileAction;
         window.checkPartNumber = checkPartNumberAction;
         window.handleCatalogSubmit = handleCatalogSubmitAction;
-        window.downloadNonSohExcel = downloadNonSohExcelAction; 
+        window.downloadNonSohExcel = downloadNonSohExcelAction;
+        window.handleUnlockConstruction = handleUnlockConstructionAction;
 
         // --- 9. INIT ---
         render();
