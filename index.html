@@ -78,6 +78,7 @@
             currentView: 'home', 
             navbarScrolled: false, 
             mobileMenuOpen: false,
+            projectMenuOpen: false, 
             reportView: 'YTD', 
             selectedWeek: 1,
             selectedMonth: null,
@@ -93,11 +94,13 @@
             pendingGR: [],
             sliderIndex: 0,
             sliderInterval: null,
-            // New States for Construction 4M1E
+            // Construction 4M1E States
             constructionUnlocked: false,
-            constructionData: { summary: [], details: [] }, // Updated structure
+            constructionData: { summary: [], details: [] }, 
             constructionLoading: false,
-            constructionError: null
+            constructionError: null,
+            // Budget Monitoring States
+            budgetUnlocked: false
         };
 
         // --- 3. UTILITIES ---
@@ -460,6 +463,42 @@
             }
         };
 
+        // --- NEW ACTIONS FOR MONITORING & BUDGET ---
+        const toggleProjectMenuAction = () => {
+            AppState.projectMenuOpen = !AppState.projectMenuOpen;
+            render();
+        };
+
+        const handleBudgetMonitorAction = () => {
+            window.nav('budget');
+        };
+
+        const handleUnlockBudgetAction = (e) => {
+            e.preventDefault();
+            const input = document.getElementById('budgetPass').value;
+            if (input === 'ariansyahsupu') {
+                AppState.budgetUnlocked = true;
+                render();
+            } else {
+                alert("Akses Ditolak: Password Salah");
+            }
+        };
+
+        const handleProjectOptionAction = (option) => {
+            AppState.projectMenuOpen = false; // Close menu
+            if (option === 'activity') {
+                // Activity Plant -> Go to About section where 4M1E is located
+                window.nav('about', 'project-dashboard');
+            } else if (option === 'fff') {
+                window.open('https://fff-class.vercel.app/', '_blank');
+            } else if (option === 'plan2026') {
+                alert("Fitur Activity Plan 2026 DC sedang dalam pengembangan.");
+            } else if (option === 'closing') {
+                alert("Fitur Closing Project sedang dalam pengembangan.");
+            }
+            render();
+        };
+
         const fetchConstructionDataAction = async () => {
             AppState.constructionLoading = true;
             render();
@@ -488,7 +527,6 @@
                         if (!hasPercentSign && num <= 1 && num > 0) {
                             num = num * 100;
                         }
-                        
                         return num;
                     };
 
@@ -721,7 +759,66 @@
             const bg = AppState.navbarScrolled ? 'bg-slate-900 shadow-lg py-3' : 'bg-transparent py-5';
             return `<nav class="fixed w-full z-50 transition-all duration-300 ${bg}"><div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 flex justify-between items-center"><div class="flex items-center space-x-2 cursor-pointer" onclick="window.nav('home')"><div class="bg-orange-500 p-2 rounded-lg"><i data-lucide="anchor" class="h-6 w-6 text-white"></i></div><div class="flex flex-col"><span class="text-xl font-bold tracking-tighter text-white">DC PALARAN</span><span class="text-xs text-orange-400 font-medium tracking-widest">Mining Logistics Hub</span></div></div><div class="hidden lg:flex items-center space-x-6"><button onclick="window.nav('home')" class="text-slate-200 hover:text-orange-500 font-medium text-sm uppercase">Home</button><button onclick="window.nav('about')" class="text-slate-200 hover:text-orange-500 font-medium text-sm uppercase">About</button><button onclick="window.nav('analysis')" class="text-slate-200 hover:text-orange-500 font-medium text-sm uppercase">Analysis Tools</button><button onclick="window.nav('home', 'functions')" class="text-slate-200 hover:text-orange-500 font-medium text-sm uppercase">Functions</button><button onclick="window.nav('home', 'process')" class="text-slate-200 hover:text-orange-500 font-medium text-sm uppercase">Process</button><button onclick="window.nav('home', 'tracking')" class="text-slate-200 hover:text-orange-500 font-medium text-sm uppercase">Tracking</button><button onclick="window.nav('catalog')" class="text-slate-200 hover:text-orange-500 font-medium text-sm uppercase flex items-center"><i data-lucide="file-text" class="w-4 h-4 mr-1"></i> Catalog</button><button onclick="window.nav('dashboard')" class="text-slate-200 hover:text-orange-500 font-medium text-sm uppercase flex items-center"><i data-lucide="layout-dashboard" class="w-4 h-4 mr-1"></i> Dashboard</button><button onclick="window.nav('home', 'contact')" class="bg-orange-500 hover:bg-orange-600 text-white px-5 py-2 rounded-sm font-bold text-sm uppercase">Check Stock</button></div><div class="lg:hidden"><button onclick="window.toggleMenu()" class="text-white"><i data-lucide="menu" class="h-8 w-8"></i></button></div></div>${AppState.mobileMenuOpen ? `<div class="lg:hidden bg-slate-900 border-t border-slate-800 p-4 space-y-2"><button onclick="window.nav('home')" class="block text-slate-300 py-2">Home</button><button onclick="window.nav('dashboard')" class="block text-slate-300 py-2">Dashboard</button></div>` : ''}</nav>`;
         }
-        function renderHero() { return `<div id="home" class="relative h-screen flex items-center justify-center overflow-hidden bg-slate-900"><div class="absolute inset-0 z-0"><img src="https://images.unsplash.com/photo-1586528116311-ad8dd3c8310d?lib=rb-4.0.3&auto=format&fit=crop&w=2070&q=80" class="w-full h-full object-cover opacity-40"><div class="absolute inset-0 bg-gradient-to-r from-slate-900 via-slate-900/80 to-transparent"></div></div><div class="relative z-10 max-w-7xl mx-auto px-4 flex flex-col justify-center h-full"><div class="max-w-3xl"><div class="inline-flex items-center space-x-2 bg-orange-500/10 border border-orange-500/30 rounded-full px-4 py-1 mb-6 backdrop-blur-sm"><span class="flex h-2 w-2 rounded-full bg-orange-500 animate-pulse"></span><span class="text-orange-400 text-sm font-semibold tracking-wide uppercase">Operational Efficiency Optimized</span></div><h1 class="text-5xl md:text-7xl font-extrabold text-white leading-tight mb-6">The Central Nerve of <br/><span class="text-transparent bg-clip-text bg-gradient-to-r from-orange-400 to-orange-600">Mining Logistics</span></h1><p class="text-xl text-slate-300 mb-8 max-w-2xl leading-relaxed">DC Palaran serves as the premier Transit Hub and Buffer Stock Center, ensuring seamless inventory stability.</p><div class="flex flex-col sm:flex-row gap-4"><button onclick="window.nav('analysis')" class="px-8 py-4 bg-orange-500 hover:bg-orange-600 text-slate-900 font-bold rounded-sm shadow-lg flex items-center justify-center">Explore Capabilities <i data-lucide="arrow-right" class="ml-2 h-5 w-5"></i></button><div class="flex gap-2"><button onclick="window.nav('dashboard')" class="px-8 py-4 border border-slate-500 bg-slate-800/50 backdrop-blur-md text-white font-bold rounded-sm hover:border-orange-500 hover:text-orange-400 flex items-center justify-center"><i data-lucide="activity" class="mr-2 h-5 w-5"></i> Live Dashboard</button><button onclick="window.nav('about')" class="px-8 py-4 border border-slate-500 bg-white/10 backdrop-blur-md text-white font-bold rounded-sm hover:bg-white/20 flex items-center justify-center">About DC</button></div></div></div></div></div>`; }
+        function renderHero() { 
+            return `
+            <div id="home" class="relative h-screen flex items-center justify-center overflow-hidden bg-slate-900">
+                <div class="absolute inset-0 z-0">
+                    <img src="https://images.unsplash.com/photo-1586528116311-ad8dd3c8310d?lib=rb-4.0.3&auto=format&fit=crop&w=2070&q=80" class="w-full h-full object-cover opacity-40">
+                    <div class="absolute inset-0 bg-gradient-to-r from-slate-900 via-slate-900/80 to-transparent"></div>
+                </div>
+                <div class="relative z-10 max-w-7xl mx-auto px-4 flex flex-col justify-center h-full">
+                    <div class="max-w-3xl">
+                        <div class="inline-flex items-center space-x-2 bg-orange-500/10 border border-orange-500/30 rounded-full px-4 py-1 mb-6 backdrop-blur-sm">
+                            <span class="flex h-2 w-2 rounded-full bg-orange-500 animate-pulse"></span>
+                            <span class="text-orange-400 text-sm font-semibold tracking-wide uppercase">Operational Efficiency Optimized</span>
+                        </div>
+                        <h1 class="text-5xl md:text-7xl font-extrabold text-white leading-tight mb-6">The Central Nerve of <br/><span class="text-transparent bg-clip-text bg-gradient-to-r from-orange-400 to-orange-600">Mining Logistics</span></h1>
+                        <p class="text-xl text-slate-300 mb-8 max-w-2xl leading-relaxed">DC Palaran serves as the premier Transit Hub and Buffer Stock Center, ensuring seamless inventory stability.</p>
+                        
+                        <!-- Main Buttons -->
+                        <div class="flex flex-col sm:flex-row gap-4 mb-6">
+                            <button onclick="window.nav('analysis')" class="px-8 py-4 bg-orange-500 hover:bg-orange-600 text-slate-900 font-bold rounded-sm shadow-lg flex items-center justify-center">Explore Capabilities <i data-lucide="arrow-right" class="ml-2 h-5 w-5"></i></button>
+                            <div class="flex gap-2">
+                                <button onclick="window.nav('dashboard')" class="px-8 py-4 border border-slate-500 bg-slate-800/50 backdrop-blur-md text-white font-bold rounded-sm hover:border-orange-500 hover:text-orange-400 flex items-center justify-center"><i data-lucide="activity" class="mr-2 h-5 w-5"></i> Live Dashboard</button>
+                                <button onclick="window.nav('about')" class="px-8 py-4 border border-slate-500 bg-white/10 backdrop-blur-md text-white font-bold rounded-sm hover:bg-white/20 flex items-center justify-center">About DC</button>
+                            </div>
+                        </div>
+
+                        <!-- Monitoring Section -->
+                        <div class="pt-6 border-t border-slate-700/50 flex flex-col sm:flex-row gap-4 items-start sm:items-center animate-in" style="animation-delay: 0.2s">
+                            <h3 class="text-slate-400 text-sm font-bold uppercase tracking-wider mr-4">Quick Access:</h3>
+                            <div class="flex flex-wrap gap-3">
+                                <button onclick="window.handleBudgetMonitor()" class="px-5 py-2.5 bg-emerald-600/90 hover:bg-emerald-600 text-white font-bold rounded-sm shadow-lg flex items-center text-sm transition-all border border-emerald-500/50 backdrop-blur-sm">
+                                    <i data-lucide="banknote" class="mr-2 h-4 w-4"></i> Monitoring Budget
+                                </button>
+                                
+                                <div class="relative">
+                                    <button onclick="window.toggleProjectMenu()" class="px-5 py-2.5 bg-indigo-600/90 hover:bg-indigo-600 text-white font-bold rounded-sm shadow-lg flex items-center text-sm transition-all border border-indigo-500/50 backdrop-blur-sm">
+                                        <i data-lucide="kanban-square" class="mr-2 h-4 w-4"></i> Monitoring Project <i data-lucide="chevron-down" class="ml-2 h-4 w-4"></i>
+                                    </button>
+                                    ${AppState.projectMenuOpen ? `
+                                    <div class="absolute left-0 mt-2 w-56 bg-slate-800 border border-slate-700 rounded-md shadow-2xl z-50 py-1 animate-in fade-in slide-in-from-top-2">
+                                        <button onclick="window.handleProjectOption('activity')" class="w-full text-left px-4 py-3 text-slate-300 hover:bg-slate-700 hover:text-white font-medium text-sm flex items-center border-b border-slate-700/50">
+                                            <i data-lucide="hard-hat" class="w-4 h-4 mr-2 text-orange-500"></i> Activity Plant (4M1E)
+                                        </button>
+                                        <button onclick="window.handleProjectOption('fff')" class="w-full text-left px-4 py-3 text-slate-300 hover:bg-slate-700 hover:text-white font-medium text-sm flex items-center border-b border-slate-700/50">
+                                            <i data-lucide="git-merge" class="w-4 h-4 mr-2 text-blue-500"></i> Fit, Form, Function
+                                        </button>
+                                        <button onclick="window.handleProjectOption('plan2026')" class="w-full text-left px-4 py-3 text-slate-300 hover:bg-slate-700 hover:text-white font-medium text-sm flex items-center border-b border-slate-700/50">
+                                            <i data-lucide="calendar-days" class="w-4 h-4 mr-2 text-purple-500"></i> Activiti Plan 2026 DC
+                                        </button>
+                                        <button onclick="window.handleProjectOption('closing')" class="w-full text-left px-4 py-3 text-slate-300 hover:bg-slate-700 hover:text-white font-medium text-sm flex items-center">
+                                            <i data-lucide="check-circle-2" class="w-4 h-4 mr-2 text-green-500"></i> Closing Project
+                                        </button>
+                                    </div>
+                                    ` : ''}
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>`; 
+        }
         function renderObjective() { return `<section class="py-20 bg-white"><div class="max-w-7xl mx-auto px-4 grid grid-cols-1 lg:grid-cols-2 gap-16 items-center"><div><h2 class="text-orange-500 font-bold uppercase tracking-widest text-sm mb-2">Our Core Mission</h2><h3 class="text-4xl font-bold text-slate-900 mb-6">Optimizing Inventory Utilization & Stabilization</h3><p class="text-slate-600 text-lg leading-relaxed mb-6">The primary objective of DC Palaran is to function as the stabilizing force across the entire supply chain.</p><ul class="space-y-4">${['Centralized Buffer Stock Management', 'Reduction of Site-Level Deadstock', 'Rapid Deployment to Satellite Projects'].map(item => `<li class="flex items-center text-slate-700 font-medium"><div class="mr-3 bg-slate-100 p-1 rounded-full text-orange-500"><i data-lucide="shield-check" class="h-5 w-5"></i></div>${item}</li>`).join('')}</ul></div><div class="relative"><div class="absolute -inset-4 bg-orange-100 rounded-xl transform rotate-2"></div><img src="https://images.unsplash.com/photo-1553413077-190dd305871c?ixlib=rb-4.0.3&auto=format&fit=crop&w=1035&q=80" class="relative rounded-lg shadow-2xl w-full object-cover h-96"></div></div></section>`; }
         function renderKeyFunctions() { return `<section id="functions" class="py-20 bg-slate-50"><div class="max-w-7xl mx-auto px-4 text-center mb-16"><h2 class="text-3xl md:text-4xl font-bold text-slate-900 mb-4">Key Operational Functions</h2><div class="w-24 h-1 bg-orange-500 mx-auto rounded-full"></div></div><div class="max-w-7xl mx-auto px-4 grid grid-cols-1 md:grid-cols-3 gap-8">${[{icon:'truck',t:'Strategic Transit Hub',d:'Primary consolidation point.'},{icon:'database',t:'Buffer Stock Center',d:'Managing volatility.'},{icon:'bar-chart-3',t:'Inventory Stabilization',d:'Control tower for MIN-MAX.'}].map(f=>`<div class="bg-white rounded-xl shadow-lg p-8 border-t-4 border-transparent hover:border-orange-500 transition-all"><div class="mb-6 bg-slate-50 w-20 h-20 rounded-full flex items-center justify-center"><i data-lucide="${f.icon}" class="h-10 w-10 text-orange-500"></i></div><h3 class="text-xl font-bold text-slate-900 mb-3">${f.t}</h3><p class="text-slate-600">${f.d}</p></div>`).join('')}</div></section>`; }
         function renderCategories() { return `<section id="categories" class="py-20 bg-slate-900 text-white"><div class="max-w-7xl mx-auto px-4 mb-12"><h2 class="text-3xl font-bold mb-2">Material Categories</h2></div><div class="max-w-7xl mx-auto px-4 grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">${[{n:'Spare Parts',i:'settings',img:'1486262715619-67b85e0b08d3'},{n:'Tyres & Rims',i:'layers',img:'1583258509156-f28822026858'},{n:'Components',i:'cpu',img:'1580894732930-0babd100d356'},{n:'General Supplies',i:'box',img:'1595074474855-f9397f8ef5fd'}].map(c=>`<div class="group relative h-96 rounded-lg overflow-hidden cursor-pointer"><img src="https://images.unsplash.com/photo-${c.img}?auto=format&fit=crop&w=600&q=80" class="absolute inset-0 w-full h-full object-cover transition-transform duration-500 group-hover:scale-110"><div class="absolute inset-0 bg-gradient-to-t from-slate-900 via-slate-900/60 to-transparent opacity-90"></div><div class="absolute bottom-0 left-0 p-6 w-full"><div class="bg-orange-500 w-12 h-12 rounded-lg flex items-center justify-center mb-4"><i data-lucide="${c.i}" class="text-white w-6 h-6"></i></div><h3 class="text-xl font-bold mb-2 border-l-4 border-orange-500 pl-3">${c.n}</h3></div></div>`).join('')}</div></section>`; }
@@ -771,7 +868,7 @@
             let constructionHTML = '';
             if (!AppState.constructionUnlocked) {
                 constructionHTML = `
-                <div class="bg-slate-900 rounded-2xl p-10 text-white shadow-2xl border border-slate-700">
+                <div id="project-dashboard" class="bg-slate-900 rounded-2xl p-10 text-white shadow-2xl border border-slate-700">
                     <div class="flex flex-col items-center justify-center text-center">
                         <div class="bg-slate-800 p-4 rounded-full mb-6 border border-slate-600"><i data-lucide="lock" class="w-8 h-8 text-orange-500"></i></div>
                         <h3 class="text-2xl font-bold mb-2">Restricted Access: Project Control</h3>
@@ -784,9 +881,9 @@
                 </div>`;
             } else {
                 if (AppState.constructionLoading) {
-                    constructionHTML = `<div class="p-10 text-center text-slate-500 bg-white rounded-xl"><i data-lucide="loader-2" class="animate-spin inline mr-2"></i> Loading Project Data...</div>`;
+                    constructionHTML = `<div id="project-dashboard" class="p-10 text-center text-slate-500 bg-white rounded-xl"><i data-lucide="loader-2" class="animate-spin inline mr-2"></i> Loading Project Data...</div>`;
                 } else if (AppState.constructionError) {
-                    constructionHTML = `<div class="p-10 text-center text-red-500 bg-red-50 rounded-xl border border-red-200">Error: ${AppState.constructionError}</div>`;
+                    constructionHTML = `<div id="project-dashboard" class="p-10 text-center text-red-500 bg-red-50 rounded-xl border border-red-200">Error: ${AppState.constructionError}</div>`;
                 } else {
                     // 1. Process Data for 4M1E Charts (Top Section) - From Summary
                     const icons = { 'MAN': 'users', 'MACHINE': 'cogs', 'METHOD': 'file-text', 'MATERIAL': 'box', 'ENVIRONMENT': 'sun' };
@@ -843,7 +940,7 @@
                     </div>`;
 
                     constructionHTML = `
-                    <div class="animate-in">
+                    <div id="project-dashboard" class="animate-in">
                         <div class="text-center mb-10">
                             <h3 class="text-3xl font-extrabold text-slate-900">Project Execution Dashboard (4M1E)</h3>
                             <p class="text-slate-500 mt-2">Executive Summary & Operational Phase Breakdown</p>
@@ -856,6 +953,79 @@
             }
 
             return `<div class="min-h-screen pt-24 pb-12 bg-slate-50 animate-in"><div class="max-w-6xl mx-auto px-4"><button onclick="window.nav('home')" class="mb-6 flex items-center text-slate-500 hover:text-orange-600 font-medium text-sm"><i data-lucide="arrow-left" class="w-4 h-4 mr-2"></i> Back to Home</button>${sliderHTML}${orgChartHTML}${constructionHTML}</div></div>`;
+        }
+
+        // --- NEW: BUDGET RENDERER ---
+        function renderBudget() {
+            let contentHTML = '';
+            if (!AppState.budgetUnlocked) {
+                contentHTML = `
+                <div class="flex flex-col items-center justify-center min-h-[60vh]">
+                    <div class="bg-slate-900 p-8 rounded-2xl shadow-2xl border border-slate-700 max-w-md w-full text-center animate-in slide-in-from-bottom-4">
+                        <div class="bg-slate-800 w-16 h-16 rounded-full flex items-center justify-center mx-auto mb-6 border border-slate-600">
+                            <i data-lucide="lock" class="w-8 h-8 text-emerald-500"></i>
+                        </div>
+                        <h2 class="text-2xl font-bold text-white mb-2">Restricted Access</h2>
+                        <p class="text-slate-400 mb-6">Enter password to access Budget Monitoring.</p>
+                        <form onsubmit="window.handleUnlockBudget(event)" class="space-y-4">
+                            <input id="budgetPass" type="password" placeholder="Password" class="w-full px-4 py-3 bg-slate-800 border border-slate-600 rounded text-white outline-none focus:border-emerald-500 transition-colors">
+                            <button type="submit" class="w-full bg-emerald-600 hover:bg-emerald-700 text-white font-bold py-3 rounded transition-colors shadow-lg">UNLOCK ACCESS</button>
+                        </form>
+                    </div>
+                </div>`;
+            } else {
+                contentHTML = `
+                <div class="animate-in fade-in slide-in-from-bottom-2">
+                    <div class="text-center mb-12">
+                        <h2 class="text-4xl font-extrabold text-slate-900 mb-4">Budget Monitoring Dashboard</h2>
+                        <div class="w-24 h-1 bg-emerald-500 mx-auto rounded-full"></div>
+                        <p class="text-slate-500 mt-4 font-medium">Fiscal Year 2025 - Financial Overview</p>
+                    </div>
+                    
+                    <div class="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
+                        <div class="bg-white p-6 rounded-xl shadow-lg border-l-4 border-blue-500 transform hover:-translate-y-1 transition-all">
+                            <div class="flex justify-between items-start mb-2">
+                                <div class="text-slate-500 text-xs font-bold uppercase">Total Budget</div>
+                                <div class="p-2 bg-blue-100 rounded-lg text-blue-600"><i data-lucide="briefcase" class="w-4 h-4"></i></div>
+                            </div>
+                            <div class="text-2xl font-extrabold text-slate-800">Rp 15.000.000.000</div>
+                            <div class="text-xs text-slate-400 mt-2">Allocated for FY 2025</div>
+                        </div>
+                        <div class="bg-white p-6 rounded-xl shadow-lg border-l-4 border-emerald-500 transform hover:-translate-y-1 transition-all">
+                            <div class="flex justify-between items-start mb-2">
+                                <div class="text-slate-500 text-xs font-bold uppercase">Realization</div>
+                                <div class="p-2 bg-emerald-100 rounded-lg text-emerald-600"><i data-lucide="check-circle" class="w-4 h-4"></i></div>
+                            </div>
+                            <div class="text-2xl font-extrabold text-slate-800">Rp 8.250.000.000</div>
+                            <div class="text-xs text-emerald-500 mt-2 font-bold">+55% Utilized</div>
+                        </div>
+                        <div class="bg-white p-6 rounded-xl shadow-lg border-l-4 border-orange-500 transform hover:-translate-y-1 transition-all">
+                            <div class="flex justify-between items-start mb-2">
+                                <div class="text-slate-500 text-xs font-bold uppercase">Remaining</div>
+                                <div class="p-2 bg-orange-100 rounded-lg text-orange-600"><i data-lucide="pie-chart" class="w-4 h-4"></i></div>
+                            </div>
+                            <div class="text-2xl font-extrabold text-slate-800">Rp 6.750.000.000</div>
+                            <div class="text-xs text-slate-400 mt-2">Available Balance</div>
+                        </div>
+                    </div>
+
+                    <div class="bg-white rounded-xl shadow-lg p-12 border border-slate-200 text-center">
+                        <div class="bg-slate-50 w-24 h-24 rounded-full flex items-center justify-center mx-auto mb-6">
+                            <i data-lucide="bar-chart-2" class="w-12 h-12 text-slate-300"></i>
+                        </div>
+                        <h3 class="text-2xl font-bold text-slate-700 mb-2">Detailed Report In Progress</h3>
+                        <p class="text-slate-500 max-w-md mx-auto">The full budget breakdown module with granular expense tracking is currently under construction by the development team.</p>
+                    </div>
+                </div>`;
+            }
+
+            return `
+            <div class="min-h-screen pt-24 pb-12 bg-slate-50 animate-in">
+                <div class="max-w-6xl mx-auto px-4">
+                    <button onclick="window.nav('home')" class="mb-6 flex items-center text-slate-500 hover:text-emerald-600 font-medium text-sm transition-colors"><i data-lucide="arrow-left" class="w-4 h-4 mr-2"></i> Back to Home</button>
+                    ${contentHTML}
+                </div>
+            </div>`;
         }
 
         function renderDashboard() {
@@ -1118,6 +1288,8 @@
             } else if (AppState.currentView === 'about') { 
                 root.insertAdjacentHTML('beforeend', renderAbout());
                 startImageSlider(); 
+            } else if (AppState.currentView === 'budget') {
+                root.insertAdjacentHTML('beforeend', renderBudget());
             }
             renderIcons();
 
@@ -1175,6 +1347,12 @@
         window.handleCatalogSubmit = handleCatalogSubmitAction;
         window.downloadNonSohExcel = downloadNonSohExcelAction;
         window.handleUnlockConstruction = handleUnlockConstructionAction;
+        
+        // New Window Actions
+        window.toggleProjectMenu = toggleProjectMenuAction;
+        window.handleBudgetMonitor = handleBudgetMonitorAction;
+        window.handleUnlockBudget = handleUnlockBudgetAction;
+        window.handleProjectOption = handleProjectOptionAction;
 
         // --- 9. INIT ---
         render();
