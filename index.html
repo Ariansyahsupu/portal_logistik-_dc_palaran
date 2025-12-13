@@ -100,7 +100,13 @@
             constructionLoading: false,
             constructionError: null,
             // Budget Monitoring States
-            budgetUnlocked: false
+            budgetUnlocked: false,
+            budgetLoading: false,
+            budgetData: { totalAll: 0, siteGroups: {
+                'DC PLRN': { total: 0, items: [] },
+                'CPLRN': { total: 0, items: [] },
+                'Depo SMD': { total: 0, items: [] }
+            } }
         };
 
         // --- 3. UTILITIES ---
@@ -478,7 +484,7 @@
             const input = document.getElementById('budgetPass').value;
             if (input === 'ariansyahsupu') {
                 AppState.budgetUnlocked = true;
-                render();
+                fetchBudgetDataAction(); 
             } else {
                 alert("Akses Ditolak: Password Salah");
             }
@@ -487,7 +493,6 @@
         const handleProjectOptionAction = (option) => {
             AppState.projectMenuOpen = false; // Close menu
             if (option === 'activity') {
-                // Activity Plant -> Go to About section where 4M1E is located
                 window.nav('about', 'project-dashboard');
             } else if (option === 'fff') {
                 window.open('https://fff-class.vercel.app/', '_blank');
@@ -497,6 +502,112 @@
                 alert("Fitur Closing Project sedang dalam pengembangan.");
             }
             render();
+        };
+
+        // --- FETCH BUDGET DATA ---
+        const fetchBudgetDataAction = async () => {
+            AppState.budgetLoading = true;
+            render();
+            try {
+                // URL for Budget Data (Sheet 1)
+                const url = 'https://docs.google.com/spreadsheets/d/e/2PACX-1vSGkQ90nXnzmDm7acjLp5P2Og3JmWIYtszHSquc64wpnxAGLsFjHvxcqmD2Moc1lSJenTFebYDqQKVR/pub?gid=0&single=true&output=csv';
+                const response = await fetch(url);
+                if (response.ok) {
+                    const text = await response.text();
+                    const rows = parseCSV(text);
+                    
+                    let totalPlan = 0;
+                    
+                    const siteGroups = {
+                        'DC PLRN': { total: 0, items: [] },
+                        'CPLRN': { total: 0, items: [] },
+                        'Depo SMD': { total: 0, items: [] }
+                    };
+
+                    let currentSite = '';
+
+                    // Normalize Value (safely handle IDR format)
+                    const parseBudgetVal = (v) => {
+                        if (!v) return 0;
+                        let clean = v.toString().replace(/[^0-9,.-]/g, '');
+                        // Handle 1.000.000 (ID) vs 1,000,000 (EN)
+                        if (clean.includes('.') && !clean.includes(',')) {
+                            // Assume dot is thousands separator for IDR budget data
+                             clean = clean.replace(/\./g, '');
+                        } else if (clean.includes(',') && !clean.includes('.')) {
+                             // Comma only? weird for budget but assume decimal? or thousands?
+                             // Usually Google Sheets CSV export is consistent. 
+                             // If it exports "760,000,000", regex removes commas.
+                             // Wait, regex [^0-9,.-] keeps comma.
+                             // If input is "760,000,000", clean is "760,000,000".
+                             // Replace comma with empty string for thousands.
+                             clean = clean.replace(/,/g, '');
+                        } else if (clean.includes('.') && clean.includes(',')) {
+                             // 1.000.000,00
+                             clean = clean.replace(/\./g, '').replace(',', '.');
+                        }
+                        return parseFloat(clean) || 0;
+                    };
+
+                    rows.slice(1).forEach(row => {
+                        // Skip completely empty rows
+                        if (!row || row.length < 2) return;
+
+                        // FILL DOWN LOGIC for Site Name (Col B / Index 1)
+                        let rawSite = (row[1] || '').trim().toUpperCase();
+                        if (rawSite) {
+                            currentSite = rawSite;
+                        }
+
+                        // Ensure we have a valid site context
+                        if (!currentSite) return;
+
+                        const costCenter = (row[8] || 'Uncategorized').trim(); // Col I / Index 8
+                        
+                        // Budget Value (Col AK / Index 36)
+                        // Safe check for row length
+                        const rawVal = (row.length > 36) ? (row[36] || '0') : '0';
+                        const val = parseBudgetVal(rawVal);
+
+                        if (val > 0) { // Only process if there's a budget value
+                            // Map normalized site key
+                            let targetKey = null;
+                            if (currentSite.includes('DC') && (currentSite.includes('PLRN') || currentSite.includes('PALARAN'))) targetKey = 'DC PLRN';
+                            else if (currentSite.includes('CPLRN') || currentSite.includes('CMX')) targetKey = 'CPLRN';
+                            else if (currentSite.includes('DEPO') || currentSite.includes('SMD')) targetKey = 'Depo SMD';
+
+                            if (targetKey) {
+                                totalPlan += val;
+                                siteGroups[targetKey].total += val;
+                                
+                                // Aggregate Cost Center per Site
+                                const existingItem = siteGroups[targetKey].items.find(i => i.desc === costCenter);
+                                if (existingItem) {
+                                    existingItem.val += val;
+                                } else {
+                                    siteGroups[targetKey].items.push({ desc: costCenter, val: val });
+                                }
+                            }
+                        }
+                    });
+
+                    // Sort items inside each site by value desc
+                    Object.keys(siteGroups).forEach(k => {
+                        siteGroups[k].items.sort((a,b) => b.val - a.val);
+                    });
+
+                    AppState.budgetData = {
+                        totalAll: totalPlan, // Corrected key name to match state
+                        siteGroups: siteGroups
+                    };
+                }
+            } catch (e) {
+                console.error("Budget Fetch Error:", e);
+                alert("Gagal memuat data Budget.");
+            } finally {
+                AppState.budgetLoading = false;
+                render();
+            }
         };
 
         const fetchConstructionDataAction = async () => {
@@ -520,9 +631,7 @@
                         let num = parseFloat(s);
                         if(isNaN(num)) return 0;
                         
-                        // Koreksi otomatis:
-                        // 1. Jika ada tanda % di string asli, berarti sudah dalam persen (misal "50%" -> 50).
-                        // 2. Jika tidak ada %, tapi nilai <= 1, asumsi desimal (misal 0.5 -> 50).
+                        // Koreksi otomatis
                         const hasPercentSign = v.toString().includes('%');
                         if (!hasPercentSign && num <= 1 && num > 0) {
                             num = num * 100;
@@ -530,14 +639,11 @@
                         return num;
                     };
 
-                    // 1. Data Summary Chart (Navigasi)
-                    // Rows N8:N12 -> Indices 7-11
                     const summary = [];
                     for(let i=7; i<=11; i++) {
                         if(rows[i]) {
                             const label = (rows[i].length > 13) ? rows[i][13] : 'Unknown';
                             const valStr = (rows[i].length > 14) ? rows[i][14] : '0';
-                            
                             summary.push({
                                 label: label, 
                                 value: parseVal(valStr)
@@ -545,22 +651,12 @@
                         }
                     }
 
-                    // 2. Data Breakdown (Main Activity)
-                    // R4:R18 -> Indices 3-17
-                    // S4:S18 -> Indices 3-17 (Completion)
                     const details = [];
-                    
                     for(let i=3; i<=17; i++) {
                         if(rows[i]) {
-                            // Ambil Main Activity dari Kolom R (Index 17)
-                            // Safe access: Pastikan array cukup panjang, jika tidak ambil string kosong
                             const name = (rows[i].length > 17) ? (rows[i][17] || '').trim() : '';
-                            
-                            // Ambil Completion dari Kolom S (Index 18)
-                            // Safe access: Jika array row tidak sampai indeks 18, set default '0'
                             const rawAch = (rows[i].length > 18) ? (rows[i][18] || '0') : '0';
                             
-                            // Filter: Hanya tampilkan jika Activity ada namanya
                             if (name !== '' && name !== '-') {
                                 details.push({
                                     name: name,     
@@ -973,61 +1069,134 @@
                         </form>
                     </div>
                 </div>`;
+            } else if (AppState.budgetLoading) {
+                contentHTML = `<div class="p-10 text-center text-slate-500 bg-white rounded-xl h-64 flex items-center justify-center"><i data-lucide="loader-2" class="animate-spin inline mr-2 w-8 h-8 text-emerald-500"></i> Loading Budget Data...</div>`;
             } else {
+                const { totalAll, siteGroups } = AppState.budgetData;
+                
+                // Helper to render cost center list
+                const renderCostCenterList = (items) => {
+                    if (!items || items.length === 0) return '<div class="text-xs text-slate-400 p-4">No data available</div>';
+                    return items.map(item => `
+                        <div class="flex justify-between items-center py-2 border-b border-slate-100 last:border-0 hover:bg-slate-50 px-2 transition-colors">
+                            <span class="text-xs font-medium text-slate-700 truncate mr-2" title="${item.desc}">${item.desc}</span>
+                            <span class="text-xs font-mono font-bold text-slate-600">${formatIDR(item.val)}</span>
+                        </div>
+                    `).join('');
+                };
+
                 contentHTML = `
                 <div class="animate-in fade-in slide-in-from-bottom-2">
                     <div class="text-center mb-12">
                         <h2 class="text-4xl font-extrabold text-slate-900 mb-4">Budget Monitoring Dashboard</h2>
                         <div class="w-24 h-1 bg-emerald-500 mx-auto rounded-full"></div>
-                        <p class="text-slate-500 mt-4 font-medium">Fiscal Year 2025 - Financial Overview</p>
+                        <p class="text-slate-500 mt-4 font-medium">Fiscal Year 2026 Planning - Financial Overview</p>
                     </div>
                     
-                    <div class="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
-                        <div class="bg-white p-6 rounded-xl shadow-lg border-l-4 border-blue-500 transform hover:-translate-y-1 transition-all">
-                            <div class="flex justify-between items-start mb-2">
-                                <div class="text-slate-500 text-xs font-bold uppercase">Total Budget</div>
-                                <div class="p-2 bg-blue-100 rounded-lg text-blue-600"><i data-lucide="briefcase" class="w-4 h-4"></i></div>
-                            </div>
-                            <div class="text-2xl font-extrabold text-slate-800">Rp 15.000.000.000</div>
-                            <div class="text-xs text-slate-400 mt-2">Allocated for FY 2025</div>
-                        </div>
-                        <div class="bg-white p-6 rounded-xl shadow-lg border-l-4 border-emerald-500 transform hover:-translate-y-1 transition-all">
-                            <div class="flex justify-between items-start mb-2">
-                                <div class="text-slate-500 text-xs font-bold uppercase">Realization</div>
-                                <div class="p-2 bg-emerald-100 rounded-lg text-emerald-600"><i data-lucide="check-circle" class="w-4 h-4"></i></div>
-                            </div>
-                            <div class="text-2xl font-extrabold text-slate-800">Rp 8.250.000.000</div>
-                            <div class="text-xs text-emerald-500 mt-2 font-bold">+55% Utilized</div>
-                        </div>
-                        <div class="bg-white p-6 rounded-xl shadow-lg border-l-4 border-orange-500 transform hover:-translate-y-1 transition-all">
-                            <div class="flex justify-between items-start mb-2">
-                                <div class="text-slate-500 text-xs font-bold uppercase">Remaining</div>
-                                <div class="p-2 bg-orange-100 rounded-lg text-orange-600"><i data-lucide="pie-chart" class="w-4 h-4"></i></div>
-                            </div>
-                            <div class="text-2xl font-extrabold text-slate-800">Rp 6.750.000.000</div>
-                            <div class="text-xs text-slate-400 mt-2">Available Balance</div>
+                    <!-- Grand Total Card (Accumulated from 3 Sites) -->
+                    <div class="bg-gradient-to-r from-slate-900 to-slate-800 p-8 rounded-2xl shadow-xl mb-10 border border-slate-700 text-center relative overflow-hidden group">
+                        <div class="absolute top-0 right-0 w-64 h-64 bg-emerald-500 opacity-10 rounded-full -mr-16 -mt-16 blur-3xl group-hover:opacity-20 transition-opacity duration-500"></div>
+                        <div class="relative z-10">
+                            <h3 class="text-slate-400 font-bold uppercase tracking-widest text-sm mb-2">Total Plan Budget 2026 (All Sites)</h3>
+                            <h1 class="text-4xl md:text-6xl font-extrabold text-white tracking-tight">${formatIDR(totalAll)}</h1>
                         </div>
                     </div>
 
-                    <div class="bg-white rounded-xl shadow-lg p-12 border border-slate-200 text-center">
-                        <div class="bg-slate-50 w-24 h-24 rounded-full flex items-center justify-center mx-auto mb-6">
-                            <i data-lucide="bar-chart-2" class="w-12 h-12 text-slate-300"></i>
+                    <!-- Site Breakdown Cards (Individual Plan Budget) -->
+                    <div class="grid grid-cols-1 md:grid-cols-3 gap-6 mb-10">
+                        <!-- DC PLRN -->
+                        <div class="bg-white rounded-xl shadow-lg border-t-4 border-blue-600 p-6 transform hover:-translate-y-1 transition-all">
+                            <div class="flex justify-between items-start mb-4">
+                                <div>
+                                    <h4 class="font-bold text-slate-800 text-lg">DC PLRN</h4>
+                                    <p class="text-xs text-slate-500 font-medium">Main Distribution Center</p>
+                                </div>
+                                <div class="p-2 bg-blue-100 rounded-lg text-blue-600"><i data-lucide="building-2" class="w-5 h-5"></i></div>
+                            </div>
+                            <div class="text-2xl font-extrabold text-slate-900 mb-1">${formatIDR(siteGroups['DC PLRN']?.total || 0)}</div>
+                            <div class="text-xs text-blue-600 font-bold bg-blue-50 inline-block px-2 py-1 rounded">Plan Budget</div>
                         </div>
-                        <h3 class="text-2xl font-bold text-slate-700 mb-2">Detailed Report In Progress</h3>
-                        <p class="text-slate-500 max-w-md mx-auto">The full budget breakdown module with granular expense tracking is currently under construction by the development team.</p>
+
+                        <!-- CPLRN -->
+                        <div class="bg-white rounded-xl shadow-lg border-t-4 border-orange-500 p-6 transform hover:-translate-y-1 transition-all">
+                            <div class="flex justify-between items-start mb-4">
+                                <div>
+                                    <h4 class="font-bold text-slate-800 text-lg">CPLRN</h4>
+                                    <p class="text-xs text-slate-500 font-medium">Consolidation Point</p>
+                                </div>
+                                <div class="p-2 bg-orange-100 rounded-lg text-orange-600"><i data-lucide="warehouse" class="w-5 h-5"></i></div>
+                            </div>
+                            <div class="text-2xl font-extrabold text-slate-900 mb-1">${formatIDR(siteGroups['CPLRN']?.total || 0)}</div>
+                            <div class="text-xs text-orange-600 font-bold bg-orange-50 inline-block px-2 py-1 rounded">Plan Budget</div>
+                        </div>
+
+                        <!-- Depo SMD -->
+                        <div class="bg-white rounded-xl shadow-lg border-t-4 border-indigo-600 p-6 transform hover:-translate-y-1 transition-all">
+                            <div class="flex justify-between items-start mb-4">
+                                <div>
+                                    <h4 class="font-bold text-slate-800 text-lg">Depo SMD</h4>
+                                    <p class="text-xs text-slate-500 font-medium">Samarinda Depot</p>
+                                </div>
+                                <div class="p-2 bg-indigo-100 rounded-lg text-indigo-600"><i data-lucide="container" class="w-5 h-5"></i></div>
+                            </div>
+                            <div class="text-2xl font-extrabold text-slate-900 mb-1">${formatIDR(siteGroups['Depo SMD']?.total || 0)}</div>
+                            <div class="text-xs text-indigo-600 font-bold bg-indigo-50 inline-block px-2 py-1 rounded">Plan Budget</div>
+                        </div>
+                    </div>
+
+                    <!-- Cost Center Breakdown Section (Split by Site) -->
+                    <div class="bg-white rounded-2xl shadow-xl border border-slate-200 overflow-hidden">
+                        <div class="p-6 bg-slate-50 border-b border-slate-200">
+                            <h3 class="text-xl font-bold text-slate-800 flex items-center">
+                                <i data-lucide="pie-chart" class="w-6 h-6 mr-3 text-emerald-600"></i> 
+                                Cost Center Breakdown by Site
+                            </h3>
+                        </div>
+                        <div class="grid grid-cols-1 lg:grid-cols-3 divide-y lg:divide-y-0 lg:divide-x divide-slate-200">
+                            <!-- DC PLRN List -->
+                            <div class="p-6">
+                                <h4 class="font-bold text-slate-700 mb-4 flex items-center text-sm uppercase tracking-wide">
+                                    <span class="w-3 h-3 bg-blue-500 rounded-full mr-2"></span> DC PLRN Details
+                                </h4>
+                                <div class="max-h-[400px] overflow-y-auto pr-2 custom-scrollbar">
+                                    ${renderCostCenterList(siteGroups['DC PLRN']?.items || [])}
+                                </div>
+                            </div>
+
+                            <!-- CPLRN List -->
+                            <div class="p-6">
+                                <h4 class="font-bold text-slate-700 mb-4 flex items-center text-sm uppercase tracking-wide">
+                                    <span class="w-3 h-3 bg-orange-500 rounded-full mr-2"></span> CPLRN Details
+                                </h4>
+                                <div class="max-h-[400px] overflow-y-auto pr-2 custom-scrollbar">
+                                    ${renderCostCenterList(siteGroups['CPLRN']?.items || [])}
+                                </div>
+                            </div>
+
+                            <!-- Depo SMD List -->
+                            <div class="p-6">
+                                <h4 class="font-bold text-slate-700 mb-4 flex items-center text-sm uppercase tracking-wide">
+                                    <span class="w-3 h-3 bg-indigo-500 rounded-full mr-2"></span> Depo SMD Details
+                                </h4>
+                                <div class="max-h-[400px] overflow-y-auto pr-2 custom-scrollbar">
+                                    ${renderCostCenterList(siteGroups['Depo SMD']?.items || [])}
+                                </div>
+                            </div>
+                        </div>
                     </div>
                 </div>`;
             }
 
             return `
             <div class="min-h-screen pt-24 pb-12 bg-slate-50 animate-in">
-                <div class="max-w-6xl mx-auto px-4">
+                <div class="max-w-7xl mx-auto px-4">
                     <button onclick="window.nav('home')" class="mb-6 flex items-center text-slate-500 hover:text-emerald-600 font-medium text-sm transition-colors"><i data-lucide="arrow-left" class="w-4 h-4 mr-2"></i> Back to Home</button>
                     ${contentHTML}
                 </div>
             </div>`;
         }
 
+        // --- DASHBOARD RENDERER (Restored) ---
         function renderDashboard() {
             if (AppState.dashboardData.length === 0) AppState.dashboardData = generateReportData();
             
