@@ -234,7 +234,16 @@
                 const resUtil = await fetch(utilSheetUrl);
                 if(resUtil.ok) {
                     const textUtil = await resUtil.text();
-                    const rowsUtil = parseCSV(textUtil).slice(1);
+                    const rowsAll = parseCSV(textUtil); 
+                    
+                    if (!rowsAll || rowsAll.length < 2) return;
+
+                    const headers = rowsAll[0].map(h => h.toString().toLowerCase().trim());
+                    let idxWeek = headers.findIndex(h => h.includes('week') || h.includes('minggu'));
+                    if (idxWeek === -1) idxWeek = 12; 
+                    let idxDate = 1; 
+
+                    const rowsUtil = rowsAll.slice(1);
                     
                     const siteMap = new Map();
                     const monthMap = new Map(); 
@@ -246,26 +255,61 @@
 
                     rowsUtil.forEach(row => {
                         if(!row[8] || !row[10]) return;
-                        const siteName = row[8].trim();
+                        
+                        // --- SITE NAME NORMALIZATION LOGIC ---
+                        let siteName = row[8].trim();
+                        const upperSite = siteName.toUpperCase();
+                        
+                        // Specific Overrides
+                        if (upperSite.includes("PL08") || upperSite.includes("DC PALARAN")) {
+                            siteName = "CMX PLRN";
+                        } else if (upperSite.includes("PL26") || upperSite.includes("MHU")) {
+                            siteName = "MHU";
+                        } else if (upperSite.includes("PL17") || upperSite.includes("MBLM")) {
+                            siteName = "MBL M";
+                        } else if (upperSite.includes("PL04") || upperSite.includes("AGM")) {
+                            siteName = "AGM";
+                        } else {
+                            // General Pattern: "PLxx (SITE)" -> "SITE"
+                            // Extracts content inside parenthesis if preceded by PLxx
+                            const match = siteName.match(/PL\d+\s*\(([^)]+)\)/i);
+                            if (match && match[1]) {
+                                siteName = match[1].trim();
+                            }
+                        }
+                        // -------------------------------------
+
                         const siteKey = normalizeString(siteName); 
                         let cleanVal = row[10].replace(/[Rp\s.]/g, '').replace(',', '.');
                         const rowValue = parseFloat(cleanVal) || 0;
-                        const dateRaw = row[1]; // Col B (Date)
+                        const dateRaw = row[idxDate]; 
                         
-                        // Category Aggregation (Col L / Index 11)
-                        const categoryName = row[11] ? row[11].trim() : "Uncategorized";
+                        // --- CATEGORY NORMALIZATION LOGIC ---
+                        let categoryName = row[11] ? row[11].trim() : "Uncategorized";
+                        const lowerCat = categoryName.toLowerCase();
+
+                        // Merge "Non SOH" and "Part Non SOH by sistem" into "Part Non SOH"
+                        if (lowerCat.includes("non soh")) {
+                            categoryName = "Part Non SOH";
+                        } 
+                        // Merge "TF Posting", "TF Post" into "TF Posting"
+                        else if (lowerCat.includes("tf post") || lowerCat.includes("tf posting")) {
+                            categoryName = "TF Posting";
+                        }
+                        // -------------------------------------
+
                         if (!categoryMap.has(categoryName)) categoryMap.set(categoryName, 0);
                         categoryMap.set(categoryName, categoryMap.get(categoryName) + rowValue);
 
                         // Capture Non SOH Data
-                        if (categoryName.toLowerCase().includes("non soh")) {
+                        if (categoryName === "Part Non SOH") {
                             AppState.nonSohData.push({
                                 "Date": row[1] || "-",
                                 "Description": row[3] || "-",
                                 "Site": siteName,
                                 "Category": categoryName,
                                 "Amount": rowValue,
-                                "Week": row[12] || "-"
+                                "Week": row[idxWeek] || "-"
                             });
                         }
 
@@ -292,7 +336,7 @@
 
                         // 4. Week Aggregation
                         let weekNum = 0;
-                        let weekRaw = (row[12] || "").toString().trim();
+                        let weekRaw = (row[idxWeek] || "").toString().trim();
                         const weekMatch = weekRaw.match(/(\d+)/);
 
                         if (weekMatch) {
@@ -309,14 +353,14 @@
 
                         if (monthName === "Mei-Agustus") {
                              weekKey = `W${weekNum > 0 ? weekNum : '1-5'}-MeiAug`;
-                             weekLabel = weekNum > 0 ? `W${weekNum} Mei-Agustus` : `W1-5 Mei-Agustus`;
+                             weekLabel = `W${weekNum > 0 ? weekNum : '1-5'} Mei-Agustus`;
                              sortOrder = 0 + (weekNum || 0);
                         } else {
                              const shortMonth = monthName.substring(0, 3);
                              weekKey = `W${weekNum}-${monthName}`;
                              weekLabel = `W${weekNum} ${shortMonth}`;
                              const mIdx = monthsOrder.indexOf(monthName);
-                             const baseIdx = mIdx !== -1 ? mIdx * 10 : 990; 
+                             const baseIdx = mIdx !== -1 ? mIdx * 100 : 9900; 
                              sortOrder = baseIdx + weekNum;
                         }
 
@@ -354,7 +398,6 @@
                     newWeeklyData.forEach(d => { d.percentage = totalWeekly > 0 ? (d.value / totalWeekly * 100) : 0; });
                     AppState.weeklyBreakdown = newWeeklyData.sort((a,b) => a.sortOrder - b.sortOrder);
                     
-                    // Flatten Category Data
                     const newYtdBreakdown = Array.from(categoryMap.entries()).map(([name, val]) => ({
                         name: name,
                         value: val,
@@ -449,9 +492,6 @@
                 if(res.ok) { 
                     const rows = parseCSV(await res.text()); 
                     // RESTORED: Hardcoded indices for stability
-                    // Column G (Index 6) = STO
-                    // Column AH (Index 33) = Status
-                    // Column AJ (Index 35) = Project
                     found = rows.find(r => r[6] && r[6].toString().trim() === input); 
                     
                     if (found) {
@@ -463,7 +503,7 @@
                 if (!found) { 
                     const mock = mockTrackData.find(m => m.sto === input); 
                     if (mock) { 
-                        found = true; // Flag as found for mock
+                        found = true; 
                         rawStatus = mock.status; 
                         project = mock.project; 
                     } 
@@ -494,7 +534,6 @@
                         const isActive = idx <= activeIndex; 
                         const isCurrent = idx === activeIndex; 
                         let color = 'bg-slate-200 text-slate-400'; 
-                        // RESTORED COLORS: Red -> Yellow -> Lime -> Green
                         if (isActive) { 
                             if (idx === 0) color = 'bg-red-600 text-white shadow-lg shadow-red-200';
                             else if (idx === 1) color = 'bg-yellow-500 text-white shadow-lg shadow-yellow-200';
