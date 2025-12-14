@@ -75,7 +75,8 @@
 
         // --- 2. STATE MANAGEMENT ---
         const AppState = { 
-            currentView: 'home', 
+            currentView: 'home',
+            dashboardMode: 'selection', // 'selection', 'utilization', 'inventory'
             navbarScrolled: false, 
             mobileMenuOpen: false,
             projectMenuOpen: false, 
@@ -109,8 +110,16 @@
                     'CPLRN': { total: 0, items: [] },
                     'Depo SMD': { total: 0, items: [] }
                 },
-                aggregatedCosts: [] // New state for aggregated costs
-            } 
+                aggregatedCosts: [] 
+            },
+            // Inventory Dashboard Data
+            inventoryData: {
+                loading: false,
+                loaded: false,
+                dc: { unrestricted: 0, inTransit: 0 },
+                cplrn: { unrestricted: 0, inTransit: 0 },
+                totalValue: 0
+            }
         };
 
         // --- 3. UTILITIES ---
@@ -402,6 +411,66 @@
             }
         };
 
+        // --- NEW: INVENTORY DATA FETCH ---
+        const fetchInventoryDataAction = async () => {
+            AppState.inventoryData.loading = true;
+            render();
+
+            const urls = [
+                'https://docs.google.com/spreadsheets/d/e/2PACX-1vRlP_G3hGSqAuvpbJwiT7Mh61rVXq36x8f_gd0WxVyM6MZj5wqPcnKc1qKtCXTCaQ/pub?output=csv', // DC
+                'https://docs.google.com/spreadsheets/d/e/2PACX-1vSQJuXr9TZho_Qn0NyHRjMxdxaJsjpRTAVQubeP8GRDImI1rFjD3Sw354TFsfz4gA/pub?output=csv'  // CPLRN
+            ];
+
+            try {
+                const [resDC, resCPLRN] = await Promise.all(urls.map(url => fetch(url)));
+                
+                const processData = (rows) => {
+                    let unrestr = 0;
+                    let transit = 0;
+                    // Skip header (row 0)
+                    for(let i=1; i<rows.length; i++) {
+                        const row = rows[i];
+                        // Column N (Index 13), Column P (Index 15)
+                        if(row.length > 15) {
+                            // Logic pembersihan string angka (misal: "1.250.000" atau "Rp 1.250.000,00")
+                            // Kita asumsikan format Indonesia (titik ribuan, koma desimal) atau standard
+                            let cleanN = row[13] ? row[13].toString().replace(/[^0-9,-]/g, "").replace(",", ".") : "0";
+                            let cleanP = row[15] ? row[15].toString().replace(/[^0-9,-]/g, "").replace(",", ".") : "0";
+                            
+                            const valN = parseFloat(cleanN) || 0;
+                            const valP = parseFloat(cleanP) || 0;
+                            
+                            unrestr += valN;
+                            transit += valP;
+                        }
+                    }
+                    return { unrestricted: unrestr, inTransit: transit };
+                };
+
+                if (resDC.ok) {
+                    const text = await resDC.text();
+                    AppState.inventoryData.dc = processData(parseCSV(text));
+                }
+                
+                if (resCPLRN.ok) {
+                    const text = await resCPLRN.text();
+                    AppState.inventoryData.cplrn = processData(parseCSV(text));
+                }
+                
+                AppState.inventoryData.totalValue = 
+                    (AppState.inventoryData.dc.unrestricted + AppState.inventoryData.dc.inTransit +
+                     AppState.inventoryData.cplrn.unrestricted + AppState.inventoryData.cplrn.inTransit);
+
+                AppState.inventoryData.loaded = true;
+
+            } catch (error) {
+                console.error("Inventory Fetch Error", error);
+            } finally {
+                AppState.inventoryData.loading = false;
+                render();
+            }
+        };
+
         const downloadNonSohExcelAction = () => {
             if (!AppState.nonSohData || AppState.nonSohData.length === 0) {
                 alert("No Non SOH data available to download.");
@@ -451,12 +520,39 @@
             if (option === 'activity') {
                 window.nav('about', 'project-dashboard');
             } else if (option === 'fff') {
-                window.open('https://fff-class.vercel.app/', '_blank');
+                // Update Link khusus untuk Monitoring Project > Fit Form Function
+                window.open('https://docs.google.com/spreadsheets/d/13dA3BH3_yYHOYRyk9Hog-RexcmvE1nyHQtQCJQIEAmo/edit?usp=sharing', '_blank');
             } else if (option === 'plan2026') {
-                alert("Fitur Activity Plan 2026 DC sedang dalam pengembangan.");
+                // Feature Implementation: Activity Plan 2026
+                window.nav('plan2026');
             } else if (option === 'closing') {
                 alert("Fitur Closing Project sedang dalam pengembangan.");
             }
+            render();
+        };
+
+        // --- NEW: DASHBOARD NAVIGATION ACTIONS ---
+        const openDashboardFeatureAction = (feature) => {
+            if (feature === 'utilization') {
+                AppState.dashboardMode = 'utilization';
+                if (AppState.dashboardData.length === 0) {
+                    fetchDashboardDataAction();
+                } else {
+                    render();
+                }
+            } else if (feature === 'inventory') {
+                AppState.dashboardMode = 'inventory';
+                // Trigger fetch when entering inventory mode if not loaded
+                if (!AppState.inventoryData.loaded) {
+                    fetchInventoryDataAction();
+                } else {
+                    render();
+                }
+            }
+        };
+
+        const resetDashboardAction = () => {
+            AppState.dashboardMode = 'selection';
             render();
         };
 
@@ -580,7 +676,7 @@
                             const rawAch = (rows[i].length > 18) ? (rows[i][18] || '0') : '0';
                             if (name !== '' && name !== '-') {
                                 details.push({
-                                    name: name,     
+                                    name: name,      
                                     achievement: parseVal(rawAch)
                                 });
                             }
@@ -627,7 +723,10 @@
         const navAction = (view, sectionId) => {
             stopImageSlider();
             AppState.currentView = view;
-            if(view === 'dashboard' && AppState.dashboardData.length === 0) fetchDashboardDataAction();
+            // Removed automatic fetch here. Now handled in openDashboardFeatureAction
+            if(view === 'dashboard') {
+                AppState.dashboardMode = 'selection'; // Reset to selection on main nav
+            }
             render();
             if(sectionId) setTimeout(() => document.getElementById(sectionId)?.scrollIntoView({behavior:'smooth'}), 100);
             else window.scrollTo(0,0);
@@ -822,7 +921,7 @@
                                             <i data-lucide="git-merge" class="w-4 h-4 mr-2 text-blue-500"></i> Fit, Form, Function
                                         </button>
                                         <button onclick="window.handleProjectOption('plan2026')" class="w-full text-left px-4 py-3 text-slate-300 hover:bg-slate-700 hover:text-white font-medium text-sm flex items-center border-b border-slate-700/50">
-                                            <i data-lucide="calendar-days" class="w-4 h-4 mr-2 text-purple-500"></i> Activiti Plan 2026 DC
+                                            <i data-lucide="calendar-days" class="w-4 h-4 mr-2 text-purple-500"></i> Activity Plan 2026 DC
                                         </button>
                                         <button onclick="window.handleProjectOption('closing')" class="w-full text-left px-4 py-3 text-slate-300 hover:bg-slate-700 hover:text-white font-medium text-sm flex items-center">
                                             <i data-lucide="check-circle-2" class="w-4 h-4 mr-2 text-green-500"></i> Closing Project
@@ -1108,7 +1207,97 @@
             }
             return `<div class="min-h-screen pt-24 pb-12 bg-slate-50 animate-in"><div class="max-w-7xl mx-auto px-4"><button onclick="window.nav('home')" class="mb-6 flex items-center text-slate-500 hover:text-emerald-600 font-medium text-sm transition-colors"><i data-lucide="arrow-left" class="w-4 h-4 mr-2"></i> Back to Home</button>${contentHTML}</div></div>`;
         }
-        function renderDashboard() {
+
+        // --- NEW: ACTIVITY PLAN 2026 RENDERER ---
+        function renderActivityPlan2026() {
+            const milestones = [
+                { q: 'Q1', title: 'Infrastructure Upgrade', items: ['Warehouse Roofing Repair', 'Road Access Improvement', 'Rack System Maintenance'], color: 'border-blue-500' },
+                { q: 'Q2', title: 'System Integration', items: ['SAP S/4HANA Migration Prep', 'Barcode System Update', 'Staff Training'], color: 'border-orange-500' },
+                { q: 'Q3', title: 'Fleet Renewal', items: ['Forklift Replacement Program', 'New Delivery Trucks', 'Safety Audit'], color: 'border-green-500' },
+                { q: 'Q4', title: 'Annual Review', items: ['Grand Stock Opname', 'Performance Audit', '2027 Budgeting'], color: 'border-purple-500' }
+            ];
+
+            return `
+            <div class="min-h-screen pt-24 pb-12 bg-slate-50 animate-in">
+                <div class="max-w-5xl mx-auto px-4">
+                    <button onclick="window.nav('home')" class="mb-6 flex items-center text-slate-500 hover:text-purple-600 font-medium text-sm transition-colors"><i data-lucide="arrow-left" class="w-4 h-4 mr-2"></i> Back to Home</button>
+                    
+                    <div class="text-center mb-12">
+                        <h2 class="text-4xl font-extrabold text-slate-900 mb-2">Activity Plan 2026</h2>
+                        <div class="w-24 h-1 bg-purple-500 mx-auto rounded-full"></div>
+                        <p class="text-slate-500 mt-3 font-medium">Strategic Roadmap & Key Milestones</p>
+                    </div>
+
+                    <div class="relative">
+                        <!-- Vertical Line -->
+                        <div class="hidden md:block absolute left-1/2 transform -translate-x-1/2 h-full w-1 bg-slate-200"></div>
+
+                        <div class="space-y-8">
+                            ${milestones.map((m, idx) => {
+                                const isLeft = idx % 2 === 0;
+                                return `
+                                <div class="flex flex-col md:flex-row items-center justify-between w-full">
+                                    <div class="w-full md:w-5/12 ${isLeft ? 'order-1 md:text-right' : 'order-1 md:order-3'}">
+                                        <div class="bg-white p-6 rounded-xl shadow-lg border-t-4 ${m.color} hover:-translate-y-1 transition-transform duration-300">
+                                            <span class="inline-block px-3 py-1 bg-slate-100 text-slate-600 font-bold text-xs rounded-full mb-2">${m.q} 2026</span>
+                                            <h3 class="text-xl font-bold text-slate-800 mb-3">${m.title}</h3>
+                                            <ul class="text-sm text-slate-600 space-y-2 ${isLeft ? 'md:items-end' : ''} flex flex-col">
+                                                ${m.items.map(i => `<li class="flex items-center"><i data-lucide="check-circle-2" class="w-4 h-4 mr-2 text-slate-400"></i> ${i}</li>`).join('')}
+                                            </ul>
+                                        </div>
+                                    </div>
+                                    
+                                    <div class="w-8 h-8 bg-slate-900 border-4 border-white rounded-full z-10 flex items-center justify-center shadow order-2">
+                                        <div class="w-2 h-2 bg-purple-500 rounded-full"></div>
+                                    </div>
+                                    
+                                    <div class="w-full md:w-5/12 ${isLeft ? 'order-3' : 'order-1'}"></div>
+                                </div>`;
+                            }).join('')}
+                        </div>
+                    </div>
+                </div>
+            </div>`;
+        }
+
+        // --- DASHBOARD RENDERERS ---
+        function renderDashboardSelection() {
+            return `
+            <div class="min-h-screen pt-24 pb-12 bg-slate-950 text-white animate-in">
+                <div class="max-w-7xl mx-auto px-4">
+                    <button onclick="window.nav('home')" class="mb-8 flex items-center text-slate-400 hover:text-orange-400 text-sm font-medium uppercase"><i data-lucide="arrow-left" class="w-4 h-4 mr-2"></i> Back to Home</button>
+                    
+                    <div class="text-center mb-12">
+                        <h2 class="text-3xl font-bold mb-4">Pilih Kategori Dashboard</h2>
+                        <p class="text-slate-400">Silakan pilih modul monitoring yang ingin Anda tampilkan.</p>
+                    </div>
+
+                    <div class="grid grid-cols-1 md:grid-cols-2 gap-8 max-w-4xl mx-auto">
+                        <!-- Card A: Utilisasi (Existing) -->
+                        <div onclick="window.openDashboardFeature('utilization')" class="bg-gradient-to-br from-slate-800 to-slate-900 border border-slate-700 hover:border-orange-500 p-8 rounded-2xl cursor-pointer group transition-all duration-300 transform hover:-translate-y-2 hover:shadow-2xl hover:shadow-orange-500/10">
+                            <div class="w-16 h-16 bg-orange-500/20 rounded-2xl flex items-center justify-center mb-6 group-hover:bg-orange-500 transition-colors">
+                                <i data-lucide="bar-chart-2" class="w-8 h-8 text-orange-500 group-hover:text-white"></i>
+                            </div>
+                            <h3 class="text-2xl font-bold text-white mb-3 group-hover:text-orange-400">Dashboard Utilisasi</h3>
+                            <p class="text-slate-400 text-sm leading-relaxed mb-6">Monitoring penyerapan anggaran, performa situs, dan analisis data utilisasi inventori secara real-time.</p>
+                            <span class="text-orange-500 font-bold text-sm flex items-center group-hover:translate-x-2 transition-transform">Buka Dashboard <i data-lucide="arrow-right" class="ml-2 w-4 h-4"></i></span>
+                        </div>
+
+                        <!-- Card B: Inventori (New) -->
+                        <div onclick="window.openDashboardFeature('inventory')" class="bg-gradient-to-br from-slate-800 to-slate-900 border border-slate-700 hover:border-blue-500 p-8 rounded-2xl cursor-pointer group transition-all duration-300 transform hover:-translate-y-2 hover:shadow-2xl hover:shadow-blue-500/10">
+                            <div class="w-16 h-16 bg-blue-500/20 rounded-2xl flex items-center justify-center mb-6 group-hover:bg-blue-500 transition-colors">
+                                <i data-lucide="package" class="w-8 h-8 text-blue-500 group-hover:text-white"></i>
+                            </div>
+                            <h3 class="text-2xl font-bold text-white mb-3 group-hover:text-blue-400">Dashboard Inventori</h3>
+                            <p class="text-slate-400 text-sm leading-relaxed mb-6">Monitoring Stock On Hand (SOH), pergerakan barang, dan status ketersediaan material di gudang.</p>
+                            <span class="text-blue-500 font-bold text-sm flex items-center group-hover:translate-x-2 transition-transform">Lihat Data SOH <i data-lucide="arrow-right" class="ml-2 w-4 h-4"></i></span>
+                        </div>
+                    </div>
+                </div>
+            </div>`;
+        }
+
+        function renderUtilizationDashboard() {
             if (AppState.dashboardData.length === 0) AppState.dashboardData = generateReportData();
             const data = AppState.dashboardData;
             const view = AppState.reportView;
@@ -1133,7 +1322,7 @@
             } else {
                 let ytdBreakdownHTML = '';
                 if (view === 'YTD' && AppState.ytdBreakdown && AppState.ytdBreakdown.length > 0) {
-                     ytdBreakdownHTML = `<div class="mt-4 grid grid-cols-1 sm:grid-cols-3 gap-3 animate-in fade-in slide-in-from-bottom-2">${AppState.ytdBreakdown.map((cat, idx) => { let colorClass = "bg-slate-500"; if (cat.name.includes("Non SOH")) colorClass = "bg-purple-500"; else if (cat.name.includes("STO")) colorClass = "bg-orange-500"; else if (cat.name.includes("TF")) colorClass = "bg-blue-500"; else colorClass = "bg-emerald-500"; return `<div class="bg-slate-800/50 rounded-lg p-3 border border-slate-700/50 flex flex-col justify-between hover:bg-slate-700/50 transition duration-300 relative group"><div class="flex justify-between items-start"><span class="text-[10px] uppercase font-bold text-slate-400 tracking-wider truncate pr-2" title="${cat.name}">${cat.name}</span><div class="${colorClass} w-2 h-2 rounded-full"></div></div><div class="mt-2"><span class="text-lg font-bold text-white tracking-tight block">${formatIDR(cat.value)}</span><span class="text-[10px] text-slate-500 font-medium">${cat.percentage.toFixed(1)}% of Total</span></div><div class="w-full bg-slate-700 h-1 mt-3 rounded-full overflow-hidden"><div class="${colorClass} h-full rounded-full" style="width: ${cat.percentage}%"></div></div>${cat.name.includes("Non SOH") ? `<button onclick="window.downloadNonSohExcel()" class="absolute top-2 right-2 p-1.5 bg-slate-700 hover:bg-slate-600 rounded-md text-white opacity-0 group-hover:opacity-100 transition-opacity" title="Download Excel"><i data-lucide="download" class="w-3 h-3"></i></button>` : ''}</div>`; }).join('')}</div>`;
+                      ytdBreakdownHTML = `<div class="mt-4 grid grid-cols-1 sm:grid-cols-3 gap-3 animate-in fade-in slide-in-from-bottom-2">${AppState.ytdBreakdown.map((cat, idx) => { let colorClass = "bg-slate-500"; if (cat.name.includes("Non SOH")) colorClass = "bg-purple-500"; else if (cat.name.includes("STO")) colorClass = "bg-orange-500"; else if (cat.name.includes("TF")) colorClass = "bg-blue-500"; else colorClass = "bg-emerald-500"; return `<div class="bg-slate-800/50 rounded-lg p-3 border border-slate-700/50 flex flex-col justify-between hover:bg-slate-700/50 transition duration-300 relative group"><div class="flex justify-between items-start"><span class="text-[10px] uppercase font-bold text-slate-400 tracking-wider truncate pr-2" title="${cat.name}">${cat.name}</span><div class="${colorClass} w-2 h-2 rounded-full"></div></div><div class="mt-2"><span class="text-lg font-bold text-white tracking-tight block">${formatIDR(cat.value)}</span><span class="text-[10px] text-slate-500 font-medium">${cat.percentage.toFixed(1)}% of Total</span></div><div class="w-full bg-slate-700 h-1 mt-3 rounded-full overflow-hidden"><div class="${colorClass} h-full rounded-full" style="width: ${cat.percentage}%"></div></div>${cat.name.includes("Non SOH") ? `<button onclick="window.downloadNonSohExcel()" class="absolute top-2 right-2 p-1.5 bg-slate-700 hover:bg-slate-600 rounded-md text-white opacity-0 group-hover:opacity-100 transition-opacity" title="Download Excel"><i data-lucide="download" class="w-3 h-3"></i></button>` : ''}</div>`; }).join('')}</div>`;
                 }
                 topContentHTML = `<div class="mb-8 animate-in"><div class="bg-gradient-to-r from-slate-900 to-slate-800 border border-slate-700 rounded-2xl p-8 shadow-2xl relative overflow-hidden group"><div class="absolute top-0 right-0 w-64 h-64 bg-orange-500 opacity-10 rounded-full -mr-16 -mt-16 blur-3xl group-hover:opacity-20 transition-opacity duration-500"></div><div class="relative z-10"><div class="flex items-center justify-between"><div><p class="text-sm text-orange-400 font-bold uppercase tracking-wider mb-1 flex items-center"><i data-lucide="trending-up" class="w-4 h-4 mr-2"></i> ${cardTitle}</p><h2 class="text-4xl md:text-6xl font-extrabold text-white tracking-tight">${formatIDR(currentTotal)}</h2></div><div class="hidden md:block bg-slate-800 p-4 rounded-xl border border-slate-700 shadow-lg"><i data-lucide="wallet" class="w-12 h-12 text-orange-500"></i></div></div>${ytdBreakdownHTML}<div class="mt-4 flex items-center space-x-4 text-sm text-slate-400"><span class="bg-green-500/20 text-green-400 px-2 py-1 rounded flex items-center"><i data-lucide="arrow-up-right" class="w-3 h-3 mr-1"></i> Live Data</span><span>${subText}</span></div></div></div></div>`;
             }
@@ -1142,7 +1331,201 @@
             const pieChartHTML = `<div class="text-center relative">${generateDonutChartSVG(pieData, "Total", formatIDR(currentTotal).replace('Rp', ''))}<div class="mt-4 grid grid-cols-2 gap-2 text-left max-h-48 overflow-y-auto">${pieData.map(d => `<div class="flex items-center text-xs text-slate-600"><span class="w-2 h-2 rounded-full mr-2" style="background:${d.color}"></span><span class="flex-1 truncate font-medium">${d.label}</span><span class="font-bold">${((d.value / currentTotal) * 100).toFixed(1)}%</span></div>`).join('')}</div></div>`;
             let barChartHTML = `<div class="space-y-3 max-h-60 overflow-y-auto">${currentData.map((item, idx) => { let v = 0; if(view === 'YTD') v = item.ytd.value; else v = item.value; const maxVal = Math.max(...currentData.map(d => view === 'YTD' ? d.ytd.value : d.value)); return `<div><div class="flex justify-between text-xs font-bold mb-1 text-slate-600"><span>${item.name}</span><span>${formatIDR(v)}</span></div><div class="w-full bg-slate-200 rounded-full h-3 overflow-hidden"><div class="h-full rounded-full bg-gradient-to-r from-orange-400 to-orange-600" style="width:${(v/maxVal)*100}%"></div></div></div>`; }).join('')}</div>`;
 
-            return `<div class="min-h-screen pt-24 pb-12 bg-slate-950 text-white animate-in"><div class="max-w-7xl mx-auto px-4"><button onclick="window.nav('home')" class="mb-6 flex items-center text-slate-400 hover:text-orange-400 text-sm font-medium uppercase"><i data-lucide="arrow-left" class="w-4 h-4 mr-2"></i> Back to Home</button>${topContentHTML}<div class="bg-slate-900/80 border border-slate-800 rounded-2xl p-2 mb-8 flex flex-col md:flex-row justify-between items-center gap-4"><div class="flex space-x-2"><button onclick="window.setReportView('YTD')" class="px-6 py-2 rounded-lg text-sm font-bold transition-all ${view==='YTD'?'bg-orange-500 text-white shadow-lg':'text-slate-400 hover:bg-slate-800'}">YTD</button><button onclick="window.setReportView('Monthly')" class="px-6 py-2 rounded-lg text-sm font-bold transition-all ${view==='Monthly'?'bg-orange-500 text-white shadow-lg':'text-slate-400 hover:bg-slate-800'}">Monthly</button><button onclick="window.setReportView('Weekly')" class="px-6 py-2 rounded-lg text-sm font-bold transition-all ${view==='Weekly'?'bg-orange-500 text-white shadow-lg':'text-slate-400 hover:bg-slate-800'}">Weekly</button></div>${view==='Weekly' && selectedWeekId ? `<div class="flex items-center space-x-2 pr-4"><span class="text-xs text-orange-400 font-bold uppercase">Viewing: ${currentData[0]?.name || 'Detail'}</span></div>` : ''}</div><div class="grid grid-cols-1 lg:grid-cols-3 gap-8"><div class="lg:col-span-2 bg-white rounded-2xl shadow-xl overflow-hidden border border-slate-200"><div class="p-6 bg-slate-50 border-b border-slate-200 flex justify-between items-center"><h3 class="text-lg font-bold text-slate-800 flex items-center"><i data-lucide="bar-chart-3" class="w-5 h-5 mr-2 text-orange-600"></i> ${showBackButton ? `Sites Breakdown` : `Data Table (${view})`}</h3>${showBackButton ? `<button onclick="${backAction}" class="text-xs bg-slate-200 hover:bg-slate-300 text-slate-700 px-3 py-1 rounded font-bold transition flex items-center"><i data-lucide="arrow-left" class="w-3 h-3 mr-1"></i> Back</button>` : ''}</div><div class="overflow-x-auto max-h-[500px] overflow-y-auto"><table class="w-full text-left text-sm text-slate-900"><thead class="bg-slate-800 text-slate-200 font-bold uppercase text-xs sticky top-0 z-10"><tr><th class="p-4">${colName}</th><th class="p-4 text-right">Value</th><th class="p-4 text-center">%</th></tr></thead><tbody class="divide-y divide-slate-100">${currentData.map(row => { let v = 0; if(view === 'YTD') v = row.ytd.value; else v = row.value; let p = currentTotal > 0 ? (v / currentTotal) * 100 : 0; let rowClass = "hover:bg-slate-50"; let clickAction = ""; if (view === 'Monthly' && !selectedMonth) { rowClass = "clickable-row"; clickAction = `onclick="window.setMonth('${row.name}')"`; } else if (view === 'Weekly' && !selectedWeekId) { rowClass = "clickable-row"; clickAction = `onclick="window.setWeeklyDrill('${row.id}')"`; } return `<tr class="${rowClass}" ${clickAction}><td class="p-4 font-bold text-slate-700">${row.name}</td><td class="p-4 text-right font-mono font-bold">${formatIDR(v)}</td><td class="p-4 text-center text-xs font-bold text-slate-500">${p.toFixed(1)}%</td></tr>`; }).join('')}</tbody></table></div></div><div class="space-y-8"><div class="bg-white rounded-2xl shadow-xl overflow-hidden border border-slate-200 h-fit"><div class="p-6 bg-slate-50 border-b border-slate-200"><h3 class="text-lg font-bold text-slate-800 flex items-center"><i data-lucide="pie-chart" class="w-5 h-5 mr-2 text-blue-600"></i> Distribution (%)</h3></div><div class="p-8 flex flex-col items-center justify-center">${pieChartHTML}</div></div><div class="bg-white rounded-2xl shadow-xl overflow-hidden border border-slate-200 h-fit"><div class="p-6 bg-slate-50 border-b border-slate-200"><h3 class="text-lg font-bold text-slate-800 flex items-center"><i data-lucide="bar-chart-2" class="w-5 h-5 mr-2 text-orange-600"></i> Comparative Analysis</h3></div><div class="p-8 flex flex-col items-center justify-center">${barChartHTML}</div></div></div></div></div></div>`;
+            return `
+            <div class="min-h-screen pt-24 pb-12 bg-slate-950 text-white animate-in">
+                <div class="max-w-7xl mx-auto px-4">
+                    <button onclick="window.resetDashboard()" class="mb-6 flex items-center text-slate-400 hover:text-blue-400 text-sm font-medium uppercase transition-colors"><i data-lucide="arrow-left" class="w-4 h-4 mr-2"></i> Back to Categories</button>
+                    ${topContentHTML}
+                    <div class="bg-slate-900/80 border border-slate-800 rounded-2xl p-2 mb-8 flex flex-col md:flex-row justify-between items-center gap-4">
+                        <div class="flex space-x-2">
+                            <button onclick="window.setReportView('YTD')" class="px-6 py-2 rounded-lg text-sm font-bold transition-all ${view==='YTD'?'bg-orange-500 text-white shadow-lg':'text-slate-400 hover:bg-slate-800'}">YTD</button>
+                            <button onclick="window.setReportView('Monthly')" class="px-6 py-2 rounded-lg text-sm font-bold transition-all ${view==='Monthly'?'bg-orange-500 text-white shadow-lg':'text-slate-400 hover:bg-slate-800'}">Monthly</button>
+                            <button onclick="window.setReportView('Weekly')" class="px-6 py-2 rounded-lg text-sm font-bold transition-all ${view==='Weekly'?'bg-orange-500 text-white shadow-lg':'text-slate-400 hover:bg-slate-800'}">Weekly</button>
+                        </div>
+                        ${view==='Weekly' && selectedWeekId ? `<div class="flex items-center space-x-2 pr-4"><span class="text-xs text-orange-400 font-bold uppercase">Viewing: ${currentData[0]?.name || 'Detail'}</span></div>` : ''}
+                    </div>
+                    <div class="grid grid-cols-1 lg:grid-cols-3 gap-8">
+                        <div class="lg:col-span-2 bg-white rounded-2xl shadow-xl overflow-hidden border border-slate-200">
+                            <div class="p-6 bg-slate-50 border-b border-slate-200 flex justify-between items-center">
+                                <h3 class="text-lg font-bold text-slate-800 flex items-center"><i data-lucide="bar-chart-3" class="w-5 h-5 mr-2 text-orange-600"></i> ${showBackButton ? `Sites Breakdown` : `Data Table (${view})`}</h3>
+                                ${showBackButton ? `<button onclick="${backAction}" class="text-xs bg-slate-200 hover:bg-slate-300 text-slate-700 px-3 py-1 rounded font-bold transition flex items-center"><i data-lucide="arrow-left" class="w-3 h-3 mr-1"></i> Back</button>` : ''}
+                            </div>
+                            <div class="overflow-x-auto max-h-[500px] overflow-y-auto">
+                                <table class="w-full text-left text-sm text-slate-900">
+                                    <thead class="bg-slate-800 text-slate-200 font-bold uppercase text-xs sticky top-0 z-10"><tr><th class="p-4">${colName}</th><th class="p-4 text-right">Value</th><th class="p-4 text-center">%</th></tr></thead>
+                                    <tbody class="divide-y divide-slate-100">
+                                        ${currentData.map(row => { let v = 0; if(view === 'YTD') v = row.ytd.value; else v = row.value; let p = currentTotal > 0 ? (v / currentTotal) * 100 : 0; let rowClass = "hover:bg-slate-50"; let clickAction = ""; if (view === 'Monthly' && !selectedMonth) { rowClass = "clickable-row"; clickAction = `onclick="window.setMonth('${row.name}')"`; } else if (view === 'Weekly' && !selectedWeekId) { rowClass = "clickable-row"; clickAction = `onclick="window.setWeeklyDrill('${row.id}')"`; } return `<tr class="${rowClass}" ${clickAction}><td class="p-4 font-bold text-slate-700">${row.name}</td><td class="p-4 text-right font-mono font-bold">${formatIDR(v)}</td><td class="p-4 text-center text-xs font-bold text-slate-500">${p.toFixed(1)}%</td></tr>`; }).join('')}
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+                        <div class="space-y-8">
+                            <div class="bg-white rounded-2xl shadow-xl overflow-hidden border border-slate-200 h-fit">
+                                <div class="p-6 bg-slate-50 border-b border-slate-200"><h3 class="text-lg font-bold text-slate-800 flex items-center"><i data-lucide="pie-chart" class="w-5 h-5 mr-2 text-blue-600"></i> Distribution (%)</h3></div>
+                                <div class="p-8 flex flex-col items-center justify-center">${pieChartHTML}</div>
+                            </div>
+                            <div class="bg-white rounded-2xl shadow-xl overflow-hidden border border-slate-200 h-fit">
+                                <div class="p-6 bg-slate-50 border-b border-slate-200"><h3 class="text-lg font-bold text-slate-800 flex items-center"><i data-lucide="bar-chart-2" class="w-5 h-5 mr-2 text-orange-600"></i> Comparative Analysis</h3></div>
+                                <div class="p-8 flex flex-col items-center justify-center">${barChartHTML}</div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>`;
+        }
+
+        function renderInventoryDashboard() {
+            // Check loading state
+            if (AppState.inventoryData.loading) {
+                return `
+                <div class="min-h-screen pt-24 pb-12 bg-slate-900 text-white animate-in">
+                    <div class="max-w-7xl mx-auto px-4">
+                        <button onclick="window.resetDashboard()" class="mb-6 flex items-center text-slate-400 hover:text-blue-400 text-sm font-medium uppercase transition-colors"><i data-lucide="arrow-left" class="w-4 h-4 mr-2"></i> Back to Categories</button>
+                        <div class="flex flex-col items-center justify-center h-64">
+                            <i data-lucide="loader-2" class="animate-spin w-12 h-12 text-blue-500 mb-4"></i>
+                            <h3 class="text-xl font-bold">Mengambil Data Inventaris...</h3>
+                            <p class="text-slate-400">Mohon tunggu sebentar.</p>
+                        </div>
+                    </div>
+                </div>`;
+            }
+
+            const { dc, cplrn, totalValue } = AppState.inventoryData;
+
+            return `
+            <div class="min-h-screen pt-24 pb-12 bg-slate-950 text-white animate-in">
+                <div class="max-w-7xl mx-auto px-4">
+                    <button onclick="window.resetDashboard()" class="mb-6 flex items-center text-slate-400 hover:text-blue-400 text-sm font-medium uppercase transition-colors"><i data-lucide="arrow-left" class="w-4 h-4 mr-2"></i> Back to Categories</button>
+                    
+                    <div class="text-center mb-8">
+                        <h2 class="text-4xl font-extrabold mb-2 text-white">Inventory Dashboard (SOH)</h2>
+                        <div class="w-24 h-1 bg-blue-500 mx-auto rounded-full mb-4"></div>
+                        <p class="text-slate-400">Real-time Stock On Hand Monitoring & Analysis</p>
+                    </div>
+
+                    <!-- Total Value Card -->
+                    <div class="bg-gradient-to-r from-blue-900 to-slate-900 border border-blue-800 rounded-2xl p-8 mb-8 shadow-2xl relative overflow-hidden">
+                        <div class="absolute top-0 right-0 w-64 h-64 bg-blue-500 opacity-10 rounded-full -mr-16 -mt-16 blur-3xl"></div>
+                        <div class="relative z-10 flex flex-col md:flex-row justify-between items-center">
+                            <div>
+                                <h3 class="text-blue-400 font-bold uppercase tracking-widest text-sm mb-2">Total Inventory Value (All Sites)</h3>
+                                <h1 class="text-4xl md:text-5xl font-extrabold text-white tracking-tight mb-2">${formatIDR(totalValue)}</h1>
+                                <p class="text-slate-400 text-sm">Combined Value Unrestricted & In-Transit</p>
+                            </div>
+                            <div class="hidden md:block bg-blue-900/50 p-4 rounded-xl border border-blue-700/50">
+                                <i data-lucide="layers" class="w-12 h-12 text-blue-400"></i>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="grid grid-cols-1 md:grid-cols-2 gap-8">
+                        <!-- DC Palaran Card -->
+                        <div class="bg-slate-900 border border-slate-800 rounded-2xl overflow-hidden hover:border-blue-600 transition-colors duration-300 shadow-xl group">
+                            <div class="bg-slate-800 p-6 border-b border-slate-700 flex justify-between items-center group-hover:bg-blue-900/20 transition-colors">
+                                <div class="flex items-center">
+                                    <div class="bg-blue-500 p-2 rounded-lg mr-4">
+                                        <i data-lucide="building-2" class="w-6 h-6 text-white"></i>
+                                    </div>
+                                    <div>
+                                        <h3 class="text-xl font-bold text-white">DC Palaran</h3>
+                                        <p class="text-xs text-blue-400 uppercase font-bold tracking-wider">Main Hub</p>
+                                    </div>
+                                </div>
+                                <div class="text-right">
+                                    <span class="text-xs text-slate-400">Total Value</span>
+                                    <div class="font-bold text-white">${formatIDR(dc.unrestricted + dc.inTransit)}</div>
+                                </div>
+                            </div>
+                            <div class="p-6 space-y-6">
+                                <!-- Unrestricted -->
+                                <div class="flex items-center justify-between p-4 bg-slate-800/50 rounded-xl border border-slate-700">
+                                    <div class="flex items-center">
+                                        <div class="bg-emerald-500/10 p-2 rounded-full mr-3">
+                                            <i data-lucide="package-check" class="w-5 h-5 text-emerald-500"></i>
+                                        </div>
+                                        <div>
+                                            <p class="text-xs text-slate-400 uppercase font-bold">Value Unrestricted</p>
+                                            <p class="text-lg font-bold text-white">${formatIDR(dc.unrestricted)}</p>
+                                        </div>
+                                    </div>
+                                </div>
+                                <!-- In Transit -->
+                                <div class="flex items-center justify-between p-4 bg-slate-800/50 rounded-xl border border-slate-700">
+                                    <div class="flex items-center">
+                                        <div class="bg-orange-500/10 p-2 rounded-full mr-3">
+                                            <i data-lucide="truck" class="w-5 h-5 text-orange-500"></i>
+                                        </div>
+                                        <div>
+                                            <p class="text-xs text-slate-400 uppercase font-bold">Value In Transit</p>
+                                            <p class="text-lg font-bold text-white">${formatIDR(dc.inTransit)}</p>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- CPLRN Card -->
+                        <div class="bg-slate-900 border border-slate-800 rounded-2xl overflow-hidden hover:border-orange-600 transition-colors duration-300 shadow-xl group">
+                            <div class="bg-slate-800 p-6 border-b border-slate-700 flex justify-between items-center group-hover:bg-orange-900/20 transition-colors">
+                                <div class="flex items-center">
+                                    <div class="bg-orange-500 p-2 rounded-lg mr-4">
+                                        <i data-lucide="warehouse" class="w-6 h-6 text-white"></i>
+                                    </div>
+                                    <div>
+                                        <h3 class="text-xl font-bold text-white">CPLRN</h3>
+                                        <p class="text-xs text-orange-400 uppercase font-bold tracking-wider">Consolidation</p>
+                                    </div>
+                                </div>
+                                <div class="text-right">
+                                    <span class="text-xs text-slate-400">Total Value</span>
+                                    <div class="font-bold text-white">${formatIDR(cplrn.unrestricted + cplrn.inTransit)}</div>
+                                </div>
+                            </div>
+                            <div class="p-6 space-y-6">
+                                <!-- Unrestricted -->
+                                <div class="flex items-center justify-between p-4 bg-slate-800/50 rounded-xl border border-slate-700">
+                                    <div class="flex items-center">
+                                        <div class="bg-emerald-500/10 p-2 rounded-full mr-3">
+                                            <i data-lucide="package-check" class="w-5 h-5 text-emerald-500"></i>
+                                        </div>
+                                        <div>
+                                            <p class="text-xs text-slate-400 uppercase font-bold">Value Unrestricted</p>
+                                            <p class="text-lg font-bold text-white">${formatIDR(cplrn.unrestricted)}</p>
+                                        </div>
+                                    </div>
+                                </div>
+                                <!-- In Transit -->
+                                <div class="flex items-center justify-between p-4 bg-slate-800/50 rounded-xl border border-slate-700">
+                                    <div class="flex items-center">
+                                        <div class="bg-orange-500/10 p-2 rounded-full mr-3">
+                                            <i data-lucide="truck" class="w-5 h-5 text-orange-500"></i>
+                                        </div>
+                                        <div>
+                                            <p class="text-xs text-slate-400 uppercase font-bold">Value In Transit</p>
+                                            <p class="text-lg font-bold text-white">${formatIDR(cplrn.inTransit)}</p>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <div class="mt-8 text-center">
+                        <p class="text-xs text-slate-500">Data fetched from Google Sheets. Last updated: ${AppState.inventoryData.loaded ? 'Just now' : '-'}</p>
+                    </div>
+                </div>
+            </div>`;
+        }
+
+        function renderDashboard() {
+            if (AppState.dashboardMode === 'selection') {
+                return renderDashboardSelection();
+            } else if (AppState.dashboardMode === 'utilization') {
+                return renderUtilizationDashboard();
+            } else if (AppState.dashboardMode === 'inventory') {
+                return renderInventoryDashboard();
+            }
+            return renderDashboardSelection(); // Default fallback
         }
 
         // --- 7. MAIN RENDER FUNCTION ---
@@ -1162,10 +1545,8 @@
                 root.insertAdjacentHTML('beforeend', renderFooter());
                 if (AppState.pendingGR.length === 0) fetchDashboardDataAction();
             } else if (AppState.currentView === 'dashboard') {
-                const dashboardEl = document.createElement('div');
-                dashboardEl.innerHTML = renderDashboard();
-                root.appendChild(dashboardEl.firstChild);
-                if (AppState.dashboardData.length === 0) fetchDashboardDataAction();
+                // FIX: Menggunakan insertAdjacentHTML langsung agar konsisten dan menghindari isu whitespace pada firstChild
+                root.insertAdjacentHTML('beforeend', renderDashboard());
             } else if (AppState.currentView === 'catalog') {
                 root.insertAdjacentHTML('beforeend', renderCatalog());
             } else if (AppState.currentView === 'analysis') {
@@ -1175,6 +1556,8 @@
                 startImageSlider(); 
             } else if (AppState.currentView === 'budget') {
                 root.insertAdjacentHTML('beforeend', renderBudget());
+            } else if (AppState.currentView === 'plan2026') {
+                root.insertAdjacentHTML('beforeend', renderActivityPlan2026());
             }
             renderIcons();
 
@@ -1238,6 +1621,10 @@
         window.handleBudgetMonitor = handleBudgetMonitorAction;
         window.handleUnlockBudget = handleUnlockBudgetAction;
         window.handleProjectOption = handleProjectOptionAction;
+        
+        // Dashboard Category Actions
+        window.openDashboardFeature = openDashboardFeatureAction;
+        window.resetDashboard = resetDashboardAction;
 
         // --- 9. INIT ---
         render();
