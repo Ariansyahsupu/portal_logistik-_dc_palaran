@@ -123,7 +123,9 @@
         };
 
         // --- 3. UTILITIES ---
+        // Restore missing utilities
         const formatIDR = (val) => new Intl.NumberFormat('id-ID', { style: 'currency', currency: 'IDR', maximumFractionDigits: 0 }).format(val);
+        
         const normalizeString = (str) => String(str).toUpperCase().replace(/[^A-Z0-9]/g, '');
         
         const renderIcons = (retries = 0) => { 
@@ -149,6 +151,50 @@
              if (currentCell || currentRow.length) { currentRow.push(currentCell.trim()); rows.push(currentRow); }
              return rows;
         }
+
+        // PERBAIKAN: Helper Parsing Angka yang Lebih Agresif untuk Format Indonesia
+        const parseFlexibleNumber = (str) => {
+            if (!str) return 0;
+            str = str.toString().trim();
+            if (str === '-' || str === '') return 0;
+            
+            // 1. Bersihkan simbol mata uang dan spasi
+            str = str.replace(/[Rp\s]/g, '');
+
+            // 2. Deteksi Format
+            const dotCount = (str.match(/\./g) || []).length;
+            const commaCount = (str.match(/,/g) || []).length;
+
+            // KASUS A: Format Indonesia Jelas (Ada banyak titik sebagai pemisah ribuan)
+            // Contoh: 18.450.000.000
+            if (dotCount > 1) {
+                str = str.replace(/\./g, ''); // Hapus semua titik
+                str = str.replace(',', '.');  // Ganti koma desimal jadi titik (jika ada)
+            } 
+            // KASUS B: Format US Jelas (Ada banyak koma)
+            // Contoh: 18,450,000,000
+            else if (commaCount > 1) {
+                str = str.replace(/,/g, '');
+            }
+            // KASUS C: Ambigu (Hanya 1 titik atau 1 koma)
+            else {
+                // Jika ada koma di akhir (misal 100000,00), ini format Indo
+                if (str.includes(',') && str.indexOf(',') > str.length - 4) {
+                     str = str.replace(/\./g, ''); // Hapus titik ribuan (jika ada 1)
+                     str = str.replace(',', '.');  // Koma jadi titik desimal
+                }
+                // Jika ada titik di akhir (misal 100000.00), ini format US
+                else if (str.includes('.') && str.indexOf('.') > str.length - 4) {
+                     // Biarkan (parseFloat bisa baca)
+                }
+                // Jika ada titik di tengah (misal 1.500), asumsikan Ribuan (Indo) untuk konteks Inventory ini
+                else if (str.includes('.')) {
+                     str = str.replace(/\./g, '');
+                }
+            }
+
+            return parseFloat(str) || 0;
+        };
 
         const parseDateFlexible = (dateStr) => {
             if (!dateStr) return null;
@@ -416,8 +462,9 @@
             AppState.inventoryData.loading = true;
             render();
 
+            // Menggunakan output=csv untuk mendapatkan data mentah
             const urls = [
-                'https://docs.google.com/spreadsheets/d/e/2PACX-1vRlP_G3hGSqAuvpbJwiT7Mh61rVXq36x8f_gd0WxVyM6MZj5wqPcnKc1qKtCXTCaQ/pub?output=csv', // DC
+                'https://docs.google.com/spreadsheets/d/e/2PACX-1vRlP_G3hGSqAuvpbJwiT7Mh61rVXq36x8f_gd0WxVyM6MZj5wqPcnKc1qKtCXTCaQ/pub?output=csv', // DC Palaran
                 'https://docs.google.com/spreadsheets/d/e/2PACX-1vSQJuXr9TZho_Qn0NyHRjMxdxaJsjpRTAVQubeP8GRDImI1rFjD3Sw354TFsfz4gA/pub?output=csv'  // CPLRN
             ];
 
@@ -427,18 +474,27 @@
                 const processData = (rows) => {
                     let unrestr = 0;
                     let transit = 0;
-                    // Skip header (row 0)
+                    
+                    // Skip header (row 0), mulai dari row 1
                     for(let i=1; i<rows.length; i++) {
                         const row = rows[i];
-                        // Column N (Index 13), Column P (Index 15)
-                        if(row.length > 15) {
-                            // Logic pembersihan string angka (misal: "1.250.000" atau "Rp 1.250.000,00")
-                            // Kita asumsikan format Indonesia (titik ribuan, koma desimal) atau standard
-                            let cleanN = row[13] ? row[13].toString().replace(/[^0-9,-]/g, "").replace(",", ".") : "0";
-                            let cleanP = row[15] ? row[15].toString().replace(/[^0-9,-]/g, "").replace(",", ".") : "0";
+                        
+                        // Pastikan row bukan row kosong total
+                        if (row.length > 1) {
+                            // Cek apakah ini baris "Total" atau footer yang tidak perlu dijumlahkan lagi
+                            const firstCol = row[0] ? row[0].toString().toLowerCase() : "";
+                            if (firstCol.includes("total") || firstCol.includes("grand")) continue;
+
+                            // Kolom N (Index 13) untuk Value Unrestricted
+                            // Kolom P (Index 15) untuk Value In Transit
                             
-                            const valN = parseFloat(cleanN) || 0;
-                            const valP = parseFloat(cleanP) || 0;
+                            // Gunakan Index yang aman (cegah undefined)
+                            let rawN = row[13] ? row[13] : "0"; 
+                            let rawP = row[15] ? row[15] : "0";
+                            
+                            // Parsing
+                            const valN = parseFlexibleNumber(rawN);
+                            const valP = parseFlexibleNumber(rawP);
                             
                             unrestr += valN;
                             transit += valP;
