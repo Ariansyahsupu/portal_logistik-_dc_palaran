@@ -93,6 +93,11 @@
             ytdBreakdown: [], 
             nonSohData: [], 
             pendingGR: [],
+            fullPendingGR: [], 
+            reminderGR: [], 
+            fullReminderGR: [], 
+            onTrackGR: [], 
+            fullOnTrackGR: [], 
             sliderIndex: 0,
             sliderInterval: null,
             // Construction 4M1E States
@@ -151,26 +156,19 @@
              return rows;
         }
 
-        // PERBAIKAN: Parser Angka Super Kuat (Regex)
         const parseFlexibleNumber = (str) => {
             if (!str) return 0;
             str = str.toString().trim();
             if (str === '-' || str === '') return 0;
             
-            // Cek tanda kurung (negatif di accounting)
             const isNegative = str.includes('(') && str.includes(')');
             
-            // Hapus semua karakter KECUALI angka, koma, titik, dan minus
-            // Ini akan membuang 'Rp', 'IDR', spasi, huruf, dll
             let cleanStr = str.replace(/[^0-9,.-]/g, '');
 
-            // Deteksi format Indonesia (titik sebagai ribuan)
-            // Jika ada lebih dari satu titik, atau titik diikuti 3 angka di akhir
             if ((cleanStr.match(/\./g) || []).length > 1 || (cleanStr.includes('.') && cleanStr.indexOf('.') < cleanStr.length - 3)) {
-                cleanStr = cleanStr.replace(/\./g, ''); // Hapus titik ribuan
-                cleanStr = cleanStr.replace(',', '.');  // Ganti koma desimal jadi titik
+                cleanStr = cleanStr.replace(/\./g, ''); 
+                cleanStr = cleanStr.replace(',', '.');  
             } else if (cleanStr.includes(',')) {
-                // Format US/Default mungkin punya koma sebagai ribuan
                 cleanStr = cleanStr.replace(/,/g, '');
             }
 
@@ -281,16 +279,21 @@
         // --- 4. DATA LOGIC & ACTIONS ---
         const fetchDashboardDataAction = async () => {
             const mockPendingItems = [{ sto: '4500123456', project: 'PL01 MSJ', days: 45, date: '2023-10-01' }];
+            const mockReminderItems = [{ sto: '4500987654', project: 'PL03 BE', days: 14, date: '2023-10-20' }];
+            const mockOnTrackItems = [{ sto: '4500112233', project: 'PL06 KALSEL', days: 3, date: '2023-11-01' }]; 
             let dataUpdated = false;
 
             try {
-                const alarmSheetUrl = 'https://docs.google.com/spreadsheets/d/1ULpZq-bZwvTaEfQ3EcnfTjOm3mOW23rhxGK1OZYBesI/export?format=csv&gid=0';
+                const alarmSheetUrl = 'https://docs.google.com/spreadsheets/d/e/2PACX-1vTPtHu0LJ4f9BZ_7zx4PFIgKShRcuFbl449_tVUbh6c0VKdTZvIM9KrfT7rp_ByEQXEr65OA4hN18Wk/pub?output=csv';
                 const response = await fetch(alarmSheetUrl);
                 if (response.ok) {
                     const text = await response.text();
                     const rows = parseCSV(text).slice(1);
                     let pendingItems = [];
+                    let reminderItems = []; 
+                    let onTrackItems = []; 
                     const today = new Date();
+                    
                     rows.forEach(row => {
                         if (!row || row.length < 7) return; 
                         const sto = row[6];
@@ -301,16 +304,38 @@
                             const sentDate = parseDateFlexible(dateStr);
                             if (sentDate) {
                                 const diff = Math.ceil(Math.abs(today - sentDate) / (1000 * 60 * 60 * 24));
-                                if (diff > 30) pendingItems.push({ sto, project, days: diff, date: dateStr });
+                                
+                                if (diff > 30) {
+                                    pendingItems.push({ sto, project, days: diff, date: dateStr });
+                                } else if (diff >= 7) {
+                                    reminderItems.push({ sto, project, days: diff, date: dateStr });
+                                } else {
+                                    onTrackItems.push({ sto, project, days: diff, date: dateStr });
+                                }
                             }
                         }
                     });
-                    AppState.pendingGR = pendingItems.length > 0 ? pendingItems.slice(0, 5) : mockPendingItems;
+
+                    AppState.fullPendingGR = pendingItems;
+                    AppState.pendingGR = pendingItems.length > 0 ? pendingItems : mockPendingItems;
+                    
+                    AppState.fullReminderGR = reminderItems;
+                    AppState.reminderGR = reminderItems.length > 0 ? reminderItems : [];
+
+                    AppState.fullOnTrackGR = onTrackItems;
+                    AppState.onTrackGR = onTrackItems.length > 0 ? onTrackItems : (pendingItems.length === 0 && reminderItems.length === 0 ? mockOnTrackItems : []);
+
                     dataUpdated = true;
                 }
-            } catch(e) { console.warn("Alarm Fetch Failed:", e.message); AppState.pendingGR = mockPendingItems; }
+            } catch(e) { 
+                console.warn("Alarm Fetch Failed:", e.message); 
+                AppState.pendingGR = mockPendingItems; 
+                AppState.reminderGR = mockReminderItems;
+                AppState.onTrackGR = mockOnTrackItems;
+            }
 
             const utilSheetUrl = 'https://docs.google.com/spreadsheets/d/e/2PACX-1vSgvF0NUSq_o9gV90IzgKGAeNiNu3I5KH0D8vde-hHHngl8Pw2HYvPGSdurUe_O0c9LM6aoApnG31TH/pub?gid=1387121170&single=true&output=csv';
+            
             try {
                 const resUtil = await fetch(utilSheetUrl);
                 if(resUtil.ok) {
@@ -438,6 +463,49 @@
                     render();
                 }
             }
+        };
+
+        // --- NEW: DOWNLOAD ACTIONS ---
+        const downloadPendingGRExcelAction = () => {
+            if (!AppState.fullPendingGR || AppState.fullPendingGR.length === 0) {
+                alert("Tidak ada data overdue untuk diunduh.");
+                return;
+            }
+            const dataToExport = AppState.fullPendingGR.map(item => ({
+                "Project Site": item.project, "STO Number": item.sto, "Tanggal Kirim": item.date, "Hari Sejak Kirim": item.days, "Status": "OVERDUE (> 30 Hari)"
+            }));
+            const worksheet = XLSX.utils.json_to_sheet(dataToExport);
+            const workbook = XLSX.utils.book_new();
+            XLSX.utils.book_append_sheet(workbook, worksheet, "Overdue GR");
+            XLSX.writeFile(workbook, `Overdue_GR_${new Date().toISOString().split('T')[0]}.xlsx`);
+        };
+
+        const downloadReminderGRExcelAction = () => {
+            if (!AppState.fullReminderGR || AppState.fullReminderGR.length === 0) {
+                alert("Tidak ada data reminder untuk diunduh.");
+                return;
+            }
+            const dataToExport = AppState.fullReminderGR.map(item => ({
+                "Project Site": item.project, "STO Number": item.sto, "Tanggal Kirim": item.date, "Hari Sejak Kirim": item.days, "Status": "WARNING (7-30 Hari)"
+            }));
+            const worksheet = XLSX.utils.json_to_sheet(dataToExport);
+            const workbook = XLSX.utils.book_new();
+            XLSX.utils.book_append_sheet(workbook, worksheet, "Reminder GR");
+            XLSX.writeFile(workbook, `Reminder_GR_${new Date().toISOString().split('T')[0]}.xlsx`);
+        };
+
+        const downloadOnTrackGRExcelAction = () => {
+            if (!AppState.fullOnTrackGR || AppState.fullOnTrackGR.length === 0) {
+                alert("Tidak ada data recent shipment untuk diunduh.");
+                return;
+            }
+            const dataToExport = AppState.fullOnTrackGR.map(item => ({
+                "Project Site": item.project, "STO Number": item.sto, "Tanggal Kirim": item.date, "Hari Sejak Kirim": item.days, "Status": "ON TRACK (< 7 Hari)"
+            }));
+            const worksheet = XLSX.utils.json_to_sheet(dataToExport);
+            const workbook = XLSX.utils.book_new();
+            XLSX.utils.book_append_sheet(workbook, worksheet, "On Track GR");
+            XLSX.writeFile(workbook, `OnTrack_GR_${new Date().toISOString().split('T')[0]}.xlsx`);
         };
 
         // --- NEW: INVENTORY DATA FETCH ---
@@ -1109,24 +1177,94 @@
 
         // --- 5. COMPONENT GENERATORS ---
         function generatePendingGRHtml() {
-            if (!AppState.pendingGR || AppState.pendingGR.length === 0) return '';
-            const itemsHtml = AppState.pendingGR.map(item => `
-                <div class="bg-red-500/20 p-3 rounded-lg border border-red-500/30 flex justify-between items-center">
-                    <div>
-                        <div class="font-bold text-white text-sm">${item.project}</div>
-                        <div class="text-xs text-red-200">STO: ${item.sto}</div>
+            // Helper to generate list items
+            const generateList = (items, colorClass, textClass) => {
+                if (!items || items.length === 0) return `<div class="text-center p-4 text-slate-400 text-sm">No items found.</div>`;
+                return items.map(item => `
+                    <div class="${colorClass} p-3 rounded-lg border flex justify-between items-center mb-2 last:mb-0 mr-1">
+                        <div>
+                            <div class="font-bold text-white text-sm">${item.project}</div>
+                            <div class="text-xs ${textClass} opacity-80">STO: ${item.sto}</div>
+                        </div>
+                        <div class="text-right">
+                            <div class="font-bold ${textClass} text-lg">${item.days} Days</div>
+                            <div class="text-[10px] ${textClass} opacity-70">Since ${item.date}</div>
+                        </div>
                     </div>
-                    <div class="text-right">
-                        <div class="font-bold text-red-400 text-lg">${item.days} Days</div>
-                        <div class="text-[10px] text-red-300">Since ${item.date}</div>
-                    </div>
-                </div>
-            `).join('');
+                `).join('');
+            };
+
+            const overdueHtml = generateList(AppState.pendingGR, 'bg-red-500/20 border-red-500/30', 'text-red-400');
+            const reminderHtml = generateList(AppState.reminderGR, 'bg-yellow-500/20 border-yellow-500/30', 'text-yellow-400');
+            const onTrackHtml = generateList(AppState.onTrackGR, 'bg-emerald-500/20 border-emerald-500/30', 'text-emerald-400');
+
             return `
-                <div id="pending-gr-wrapper" class="mt-8 bg-slate-900 rounded-2xl p-2 shadow-xl animate-in slide-in-from-top">
-                    <div class="bg-red-500/10 border border-red-500/50 rounded-xl p-6">
-                        <div class="flex items-center mb-4"><div class="bg-red-500 p-2 rounded-lg mr-4"><i data-lucide="alert-triangle" class="text-white w-6 h-6"></i></div><div><h3 class="text-xl font-bold text-white">Action Required: Overdue Goods Receipt</h3><p class="text-red-300 text-sm">Shipments older than 30 days pending confirmation.</p></div></div>
-                        <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">${itemsHtml}<div class="col-span-full text-center mt-2 font-bold text-white">"Please complete Goods Receipt immediately before requesting new items."</div></div>
+                <div id="pending-gr-wrapper" class="mt-8 animate-in slide-in-from-top">
+                    <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+                        
+                        <!-- CARD 1: OVERDUE (MERAH) -->
+                        <div class="bg-slate-900 rounded-2xl p-1 shadow-xl border border-red-900/50">
+                            <div class="bg-red-900/10 rounded-xl p-6 h-full flex flex-col max-h-[500px]">
+                                <div class="flex items-center justify-between mb-4">
+                                    <div class="flex items-center">
+                                        <div class="bg-red-600 p-2 rounded-lg mr-3 shadow-lg shadow-red-900/50"><i data-lucide="alert-octagon" class="text-white w-5 h-5"></i></div>
+                                        <div>
+                                            <h3 class="text-base font-bold text-white leading-tight">Action Required</h3>
+                                            <p class="text-red-400 text-[10px] font-bold uppercase tracking-wider">Late > 30 Days (${AppState.pendingGR.length})</p>
+                                        </div>
+                                    </div>
+                                    <button onclick="window.downloadPendingGRExcel()" class="bg-slate-800 hover:bg-red-600 text-white p-1.5 rounded-lg transition-all shadow border border-slate-600 hover:border-red-500 group" title="Download">
+                                        <i data-lucide="download" class="w-4 h-4"></i>
+                                    </button>
+                                </div>
+                                <div class="space-y-2 flex-1 overflow-y-auto custom-scrollbar pr-1">
+                                    ${overdueHtml}
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- CARD 2: REMINDER (KUNING) -->
+                        <div class="bg-slate-900 rounded-2xl p-1 shadow-xl border border-yellow-900/50">
+                            <div class="bg-yellow-900/10 rounded-xl p-6 h-full flex flex-col max-h-[500px]">
+                                <div class="flex items-center justify-between mb-4">
+                                    <div class="flex items-center">
+                                        <div class="bg-yellow-600 p-2 rounded-lg mr-3 shadow-lg shadow-yellow-900/50"><i data-lucide="bell-ring" class="text-white w-5 h-5"></i></div>
+                                        <div>
+                                            <h3 class="text-base font-bold text-white leading-tight">Reminder GR</h3>
+                                            <p class="text-yellow-400 text-[10px] font-bold uppercase tracking-wider">Warning 7-30 Days (${AppState.reminderGR.length})</p>
+                                        </div>
+                                    </div>
+                                    <button onclick="window.downloadReminderGRExcel()" class="bg-slate-800 hover:bg-yellow-600 text-white p-1.5 rounded-lg transition-all shadow border border-slate-600 hover:border-yellow-500 group" title="Download">
+                                        <i data-lucide="download" class="w-4 h-4"></i>
+                                    </button>
+                                </div>
+                                <div class="space-y-2 flex-1 overflow-y-auto custom-scrollbar pr-1">
+                                    ${reminderHtml}
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- CARD 3: ON TRACK (HIJAU) -->
+                        <div class="bg-slate-900 rounded-2xl p-1 shadow-xl border border-emerald-900/50">
+                            <div class="bg-emerald-900/10 rounded-xl p-6 h-full flex flex-col max-h-[500px]">
+                                <div class="flex items-center justify-between mb-4">
+                                    <div class="flex items-center">
+                                        <div class="bg-emerald-600 p-2 rounded-lg mr-3 shadow-lg shadow-emerald-900/50"><i data-lucide="check-circle-2" class="text-white w-5 h-5"></i></div>
+                                        <div>
+                                            <h3 class="text-base font-bold text-white leading-tight">On Track</h3>
+                                            <p class="text-emerald-400 text-[10px] font-bold uppercase tracking-wider">Recent < 7 Days (${AppState.onTrackGR.length})</p>
+                                        </div>
+                                    </div>
+                                    <button onclick="window.downloadOnTrackGRExcel()" class="bg-slate-800 hover:bg-emerald-600 text-white p-1.5 rounded-lg transition-all shadow border border-slate-600 hover:border-emerald-500 group" title="Download">
+                                        <i data-lucide="download" class="w-4 h-4"></i>
+                                    </button>
+                                </div>
+                                <div class="space-y-2 flex-1 overflow-y-auto custom-scrollbar pr-1">
+                                    ${onTrackHtml}
+                                </div>
+                            </div>
+                        </div>
+
                     </div>
                 </div>`;
         }
@@ -1203,7 +1341,7 @@
         function renderCategories() { return `<section id="categories" class="py-20 bg-slate-900 text-white"><div class="max-w-7xl mx-auto px-4 mb-12"><h2 class="text-3xl font-bold mb-2">Material Categories</h2></div><div class="max-w-7xl mx-auto px-4 grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">${[{n:'Spare Parts',i:'settings',img:'1486262715619-67b85e0b08d3'},{n:'Tyres & Rims',i:'layers',img:'1583258509156-f28822026858'},{n:'Components',i:'cpu',img:'1580894732930-0babd100d356'},{n:'General Supplies',i:'box',img:'1595074474855-f9397f8ef5fd'}].map(c=>`<div class="group relative h-96 rounded-lg overflow-hidden cursor-pointer"><img src="https://images.unsplash.com/photo-${c.img}?auto=format&fit=crop&w=600&q=80" class="absolute inset-0 w-full h-full object-cover transition-transform duration-500 group-hover:scale-110"><div class="absolute inset-0 bg-gradient-to-t from-slate-900 via-slate-900/60 to-transparent opacity-90"></div><div class="absolute bottom-0 left-0 p-6 w-full"><div class="bg-orange-500 w-12 h-12 rounded-lg flex items-center justify-center mb-4"><i data-lucide="${c.i}" class="text-white w-6 h-6"></i></div><h3 class="text-xl font-bold mb-2 border-l-4 border-orange-500 pl-3">${c.n}</h3></div></div>`).join('')}</div></section>`; }
         function renderProcess() { return `<section id="process" class="py-20 bg-white"><div class="max-w-7xl mx-auto px-4 text-center mb-16"><h2 class="text-3xl font-bold text-slate-900">Operational Process Flow</h2></div><div class="max-w-7xl mx-auto px-4 relative"><div class="hidden md:block absolute top-1/2 left-0 w-full h-1 bg-slate-200 -translate-y-1/2 z-0"></div><div class="grid grid-cols-1 md:grid-cols-3 gap-12 relative z-10">${['Incoming & QC', 'Inventory Mgmt', 'Outgoing & Dispatch'].map((t,i) => `<div class="bg-white p-6 rounded-xl border border-slate-100 shadow-lg text-center"><div class="w-16 h-16 ${i===1?'bg-orange-500':'bg-slate-900'} text-white rounded-full flex items-center justify-center text-2xl font-bold mx-auto mb-6 ring-8 ring-white">${i+1}</div><h3 class="text-xl font-bold text-slate-800 mb-3">${t}</h3><p class="text-slate-500 text-sm">Critical procedures ensuring operational excellence.</p></div>`).join('')}</div></div></section>`; }
         function renderTrackingSection() { return `<section id="tracking" class="py-20 bg-slate-50 border-b border-slate-200"><div class="max-w-7xl mx-auto px-4"><div class="bg-white rounded-2xl shadow-xl overflow-hidden flex flex-col md:flex-row"><div class="md:w-5/12 bg-slate-900 p-10 text-white flex flex-col justify-center"><h2 class="text-3xl font-bold mb-4 flex items-center"><i data-lucide="search" class="mr-3 text-orange-500"></i> Track Shipment</h2><p class="text-slate-300">Monitor real-time status via STO Number.</p></div><div class="md:w-7/12 p-10"><form onsubmit="window.handleTrack(event)" class="mb-8"><label class="block text-sm font-bold text-slate-900 mb-2 uppercase">Enter STO Number</label><div class="flex gap-2"><input id="stoInput" type="text" placeholder="e.g. 450012345" class="flex-1 px-4 py-3 border border-slate-300 rounded-sm focus:ring-2 focus:ring-orange-500 outline-none"><button type="submit" class="bg-orange-500 text-white font-bold px-8 py-3 rounded-sm hover:bg-orange-600">Track</button></div></form><div id="trackingResult" class="hidden animate-in"></div></div></div><div id="pending-gr-container">${generatePendingGRHtml()}</div></div></section>`; }
-        function renderContact() { return `<section id="contact" class="py-20 bg-slate-900 text-white"><div class="max-w-7xl mx-auto px-4 grid grid-cols-1 md:grid-cols-2 gap-16"><div><h2 class="text-3xl font-bold mb-6">Contact Control Tower</h2><div class="space-y-6"><div class="flex items-start"><i data-lucide="map-pin" class="w-6 h-6 text-orange-500 mr-4"></i><div><h4 class="font-bold">DC Palaran Main Hub</h4><p class="text-slate-400 text-sm">Jl. Trikora, Palaran, Samarinda</p></div></div><div class="flex items-center"><i data-lucide="phone" class="w-6 h-6 text-orange-500 mr-4"></i><div><h4 class="font-bold">Hotline</h4><p class="text-slate-400 text-sm">+62 811-555-0123</p></div></div></div></div><div class="bg-white rounded-lg p-8 text-slate-900"><h3 class="text-2xl font-bold text-slate-900 mb-6">Quick Stock Check</h3><form onsubmit="window.handleStockCheck(event)" class="space-y-4"><div><label class="block text-sm font-bold mb-2">Project Site</label><select name="site" class="w-full px-4 py-3 bg-slate-100 border-none rounded-sm"><option value="" disabled selected>Select Site...</option>${[{code: "PL01", name: "MSJ"}, {code: "PL03", name: "BE"}, {code: "PL06", name: "KALSEL"}, {code: "PL09", name: "MME"}, {code: "PL14", name: "TJP"}, {code: "PL15", name: "GAM"}, {code: "PL18", name: "ABP"}, {code: "PL19", name: "GSP"}, {code: "PL22", name: "MRW"}].map(p=>`<option value="${p.name} (${p.code})">${p.name} (${p.code})</option>`).join('')}</select></div><div><label class="block text-sm font-bold mb-2">Search By</label><div class="flex gap-4 mb-2"><label class="flex items-center space-x-2"><input type="radio" name="type" value="Material Number" checked><span>Material Number</span></label><label class="flex items-center space-x-2"><input type="radio" name="type" value="Part Number"><span>Part Number</span></label></div><input name="item" type="text" class="w-full px-4 py-3 bg-slate-100 border-none rounded-sm" placeholder="Enter Number..." required></div><button type="submit" class="w-full bg-green-600 text-white font-bold py-3 rounded-sm hover:bg-green-700 flex items-center justify-center"><i data-lucide="send" class="w-4 h-4 mr-2"></i> Check Stock via WhatsApp</button></div></section>`; }
+        function renderContact() { return `<section id="contact" class="py-20 bg-slate-900 text-white"><div class="max-w-7xl mx-auto px-4 grid grid-cols-1 md:grid-cols-2 gap-16"><div><h2 class="text-3xl font-bold mb-6">Contact Control Tower</h2><div class="space-y-6"><div class="flex items-start"><i data-lucide="map-pin" class="w-6 h-6 text-orange-500 mr-4"></i><div><h4 class="font-bold">DC Palaran Main Hub</h4><p class="text-slate-400 text-sm">Jl. Trikora, Palaran, Samarinda</p></div></div><div class="flex items-center"><i data-lucide="phone" class="w-6 h-6 text-orange-500 mr-4"></i><div><h4 class="font-bold">Ariansyah Supu</h4><p class="text-slate-400 text-sm">+62 812-4379-7285</p></div></div></div></div><div class="bg-white rounded-lg p-8 text-slate-900"><h3 class="text-2xl font-bold text-slate-900 mb-6">Quick Stock Check</h3><form onsubmit="window.handleStockCheck(event)" class="space-y-4"><div><label class="block text-sm font-bold mb-2">Project Site</label><select name="site" class="w-full px-4 py-3 bg-slate-100 border-none rounded-sm"><option value="" disabled selected>Select Site...</option>${[{code: "PL01", name: "MSJ"}, {code: "PL03", name: "BE"}, {code: "PL06", name: "KALSEL"}, {code: "PL09", name: "MME"}, {code: "PL14", name: "TJP"}, {code: "PL15", name: "GAM"}, {code: "PL18", name: "ABP"}, {code: "PL19", name: "GSP"}, {code: "PL22", name: "MRW"}].map(p=>`<option value="${p.name} (${p.code})">${p.name} (${p.code})</option>`).join('')}</select></div><div><label class="block text-sm font-bold mb-2">Search By</label><div class="flex gap-4 mb-2"><label class="flex items-center space-x-2"><input type="radio" name="type" value="Material Number" checked><span>Material Number</span></label><label class="flex items-center space-x-2"><input type="radio" name="type" value="Part Number"><span>Part Number</span></label></div><input name="item" type="text" class="w-full px-4 py-3 bg-slate-100 border-none rounded-sm" placeholder="Enter Number..." required></div><button type="submit" class="w-full bg-green-600 text-white font-bold py-3 rounded-sm hover:bg-green-700 flex items-center justify-center"><i data-lucide="send" class="w-4 h-4 mr-2"></i> Check Stock via WhatsApp</button></div></section>`; }
         function renderFooter() { return `<footer class="bg-slate-950 text-slate-400 py-8 text-center"><p>&copy; 2025 DC Palaran. All rights reserved.</p></footer>`; }
         function renderAnalysisLanding() {
             return `<div class="min-h-screen pt-24 pb-12 bg-slate-900 text-white animate-in"><div class="max-w-7xl mx-auto px-4 text-center mb-12"><h2 class="text-4xl font-extrabold mb-4">Analysis Tools</h2><button onclick="window.nav('home')" class="text-orange-500 hover:text-orange-400">Back to Home</button></div><div class="max-w-7xl mx-auto px-4 grid grid-cols-1 md:grid-cols-3 gap-8"><div onclick="window.open('https://fff-class.vercel.app/', '_blank')" class="bg-slate-800 rounded-2xl p-8 border border-slate-700 hover:border-orange-500 cursor-pointer group relative overflow-hidden"><div class="absolute top-0 right-0 w-32 h-32 bg-orange-500 opacity-10 rounded-bl-full -mr-8 -mt-8"></div><div class="w-16 h-16 bg-orange-500 rounded-2xl flex items-center justify-center mb-6"><i data-lucide="git-merge" class="text-white w-8 h-8"></i></div><h3 class="text-xl font-bold mb-3">FFF Class Analysis</h3><span class="text-xs font-bold uppercase text-slate-500 group-hover:text-white flex items-center">Launch Tool <i data-lucide="arrow-right" class="ml-2 w-4 h-4"></i></span></div><div onclick="window.open('https://analisis-pr-oustanding-dc-palaran.vercel.app/', '_blank')" class="bg-slate-800 rounded-2xl p-8 border border-slate-700 hover:border-blue-500 cursor-pointer group relative overflow-hidden"><div class="absolute top-0 right-0 w-32 h-32 bg-blue-600 opacity-10 rounded-bl-full -mr-8 -mt-8"></div><div class="w-16 h-16 bg-blue-600 rounded-2xl flex items-center justify-center mb-6"><i data-lucide="bar-chart-3" class="text-white w-8 h-8"></i></div><h3 class="text-xl font-bold mb-3">PR OS Analysis</h3><span class="text-xs font-bold uppercase text-slate-500 group-hover:text-white flex items-center">Launch Tool <i data-lucide="arrow-right" class="ml-2 w-4 h-4"></i></span></div><div onclick="window.open('https://block-master-dc-palaran.vercel.app/', '_blank')" class="bg-slate-800 rounded-2xl p-8 border border-slate-700 hover:border-slate-500 cursor-pointer group relative overflow-hidden"><div class="absolute top-0 right-0 w-32 h-32 bg-slate-600 opacity-10 rounded-bl-full -mr-8 -mt-8"></div><div class="w-16 h-16 bg-slate-600 rounded-2xl flex items-center justify-center mb-6"><i data-lucide="alert-triangle" class="text-white w-8 h-8"></i></div><h3 class="text-xl font-bold mb-3">Block Master</h3><span class="text-xs font-bold uppercase text-slate-500 group-hover:text-white flex items-center">Launch Tool <i data-lucide="arrow-right" class="ml-2 w-4 h-4"></i></span></div></div></div>`;
@@ -1930,6 +2068,11 @@
         // Dashboard Category Actions
         window.openDashboardFeature = openDashboardFeatureAction;
         window.resetDashboard = resetDashboardAction;
+        
+        // --- ADDED DOWNLOAD ACTION ---
+        window.downloadPendingGRExcel = downloadPendingGRExcelAction;
+        window.downloadReminderGRExcel = downloadReminderGRExcelAction; 
+        window.downloadOnTrackGRExcel = downloadOnTrackGRExcelAction; // New Action
 
         // --- 9. INIT ---
         render();
