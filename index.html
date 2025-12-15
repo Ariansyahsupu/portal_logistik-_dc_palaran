@@ -124,7 +124,11 @@
                 dc: { unrestricted: 0, inTransit: 0 },
                 cplrn: { unrestricted: 0, inTransit: 0 },
                 totalValue: 0
-            }
+            },
+            // Security State
+            isPasswordModalOpen: false,
+            pendingAction: null, // 'dashboard' or 'projectMenu'
+            passwordError: false
         };
 
         // --- 3. UTILITIES ---
@@ -506,6 +510,50 @@
             const workbook = XLSX.utils.book_new();
             XLSX.utils.book_append_sheet(workbook, worksheet, "On Track GR");
             XLSX.writeFile(workbook, `OnTrack_GR_${new Date().toISOString().split('T')[0]}.xlsx`);
+        };
+
+        const handleDashboardAccess = () => {
+            AppState.pendingAction = 'dashboard';
+            AppState.isPasswordModalOpen = true;
+            AppState.passwordError = false;
+            render();
+            setTimeout(() => document.getElementById('globalPasswordInput')?.focus(), 100);
+        };
+
+        const handleProjectMenuAccess = () => {
+            if (AppState.projectMenuOpen) {
+                toggleProjectMenuAction();
+                return;
+            }
+            AppState.pendingAction = 'projectMenu';
+            AppState.isPasswordModalOpen = true;
+            AppState.passwordError = false;
+            render();
+            setTimeout(() => document.getElementById('globalPasswordInput')?.focus(), 100);
+        };
+
+        const closePasswordModal = () => {
+            AppState.isPasswordModalOpen = false;
+            AppState.pendingAction = null;
+            AppState.passwordError = false;
+            render();
+        };
+
+        const submitGlobalPassword = (e) => {
+            e.preventDefault();
+            const input = document.getElementById('globalPasswordInput').value;
+            if (input === '1122') {
+                AppState.isPasswordModalOpen = false;
+                if (AppState.pendingAction === 'dashboard') {
+                    navAction('dashboard');
+                } else if (AppState.pendingAction === 'projectMenu') {
+                    toggleProjectMenuAction();
+                }
+                AppState.pendingAction = null;
+            } else {
+                AppState.passwordError = true;
+            }
+            render();
         };
 
         // --- NEW: INVENTORY DATA FETCH ---
@@ -1272,7 +1320,7 @@
         // --- 6. RENDERERS ---
         function renderNavbar() {
             const bg = AppState.navbarScrolled ? 'bg-slate-900 shadow-lg py-3' : 'bg-transparent py-5';
-            return `<nav class="fixed w-full z-50 transition-all duration-300 ${bg}"><div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 flex justify-between items-center"><div class="flex items-center space-x-2 cursor-pointer" onclick="window.nav('home')"><div class="bg-orange-500 p-2 rounded-lg"><i data-lucide="anchor" class="h-6 w-6 text-white"></i></div><div class="flex flex-col"><span class="text-xl font-bold tracking-tighter text-white">DC PALARAN</span><span class="text-xs text-orange-400 font-medium tracking-widest">Mining Logistics Hub</span></div></div><div class="hidden lg:flex items-center space-x-6"><button onclick="window.nav('home')" class="text-slate-200 hover:text-orange-500 font-medium text-sm uppercase">Home</button><button onclick="window.nav('about')" class="text-slate-200 hover:text-orange-500 font-medium text-sm uppercase">About</button><button onclick="window.nav('analysis')" class="text-slate-200 hover:text-orange-500 font-medium text-sm uppercase">Analysis Tools</button><button onclick="window.nav('home', 'functions')" class="text-slate-200 hover:text-orange-500 font-medium text-sm uppercase">Functions</button><button onclick="window.nav('home', 'process')" class="text-slate-200 hover:text-orange-500 font-medium text-sm uppercase">Process</button><button onclick="window.nav('home', 'tracking')" class="text-slate-200 hover:text-orange-500 font-medium text-sm uppercase">Tracking</button><button onclick="window.nav('catalog')" class="text-slate-200 hover:text-orange-500 font-medium text-sm uppercase flex items-center"><i data-lucide="file-text" class="w-4 h-4 mr-1"></i> Catalog</button><button onclick="window.nav('dashboard')" class="text-slate-200 hover:text-orange-500 font-medium text-sm uppercase flex items-center"><i data-lucide="layout-dashboard" class="w-4 h-4 mr-1"></i> Dashboard</button><button onclick="window.nav('home', 'contact')" class="bg-orange-500 hover:bg-orange-600 text-white px-5 py-2 rounded-sm font-bold text-sm uppercase">Check Stock</button></div><div class="lg:hidden"><button onclick="window.toggleMenu()" class="text-white"><i data-lucide="menu" class="h-8 w-8"></i></button></div></div>${AppState.mobileMenuOpen ? `<div class="lg:hidden bg-slate-900 border-t border-slate-800 p-4 space-y-2"><button onclick="window.nav('home')" class="block text-slate-300 py-2">Home</button><button onclick="window.nav('dashboard')" class="block text-slate-300 py-2">Dashboard</button></div>` : ''}</nav>`;
+            return `<nav class="fixed w-full z-50 transition-all duration-300 ${bg}"><div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 flex justify-between items-center"><div class="flex items-center space-x-2 cursor-pointer" onclick="window.nav('home')"><div class="bg-orange-500 p-2 rounded-lg"><i data-lucide="warehouse" class="h-6 w-6 text-white"></i></div><div class="flex flex-col"><span class="text-xl font-bold tracking-tighter text-white">DC PALARAN</span><span class="text-xs text-orange-400 font-medium tracking-widest">Mining Logistics Hub</span></div></div><div class="hidden lg:flex items-center space-x-6"><button onclick="window.nav('home')" class="text-slate-200 hover:text-orange-500 font-medium text-sm uppercase">Home</button><button onclick="window.nav('about')" class="text-slate-200 hover:text-orange-500 font-medium text-sm uppercase">About</button><button onclick="window.nav('analysis')" class="text-slate-200 hover:text-orange-500 font-medium text-sm uppercase">Analysis Tools</button><button onclick="window.nav('home', 'functions')" class="text-slate-200 hover:text-orange-500 font-medium text-sm uppercase">Functions</button><button onclick="window.nav('home', 'process')" class="text-slate-200 hover:text-orange-500 font-medium text-sm uppercase">Process</button><button onclick="window.nav('home', 'tracking')" class="text-slate-200 hover:text-orange-500 font-medium text-sm uppercase">Tracking</button><button onclick="window.nav('catalog')" class="text-slate-200 hover:text-orange-500 font-medium text-sm uppercase flex items-center"><i data-lucide="file-text" class="w-4 h-4 mr-1"></i> Catalog</button><button onclick="window.handleDashboardAccess()" class="text-slate-200 hover:text-orange-500 font-medium text-sm uppercase flex items-center"><i data-lucide="layout-dashboard" class="w-4 h-4 mr-1"></i> Dashboard</button><button onclick="window.nav('home', 'contact')" class="bg-orange-500 hover:bg-orange-600 text-white px-5 py-2 rounded-sm font-bold text-sm uppercase">Check Stock</button></div><div class="lg:hidden"><button onclick="window.toggleMenu()" class="text-white"><i data-lucide="menu" class="h-8 w-8"></i></button></div></div>${AppState.mobileMenuOpen ? `<div class="lg:hidden bg-slate-900 border-t border-slate-800 p-4 space-y-2"><button onclick="window.nav('home')" class="block text-slate-300 py-2">Home</button><button onclick="window.handleDashboardAccess()" class="block text-slate-300 py-2">Dashboard</button></div>` : ''}</nav>`;
         }
         function renderHero() { 
             return `
@@ -1296,7 +1344,7 @@
                                 Explore Capabilities <i data-lucide="arrow-right" class="ml-2 h-5 w-5"></i>
                             </button>
                             <div class="flex gap-4">
-                                <button onclick="window.nav('dashboard')" class="px-8 py-4 border border-slate-600 bg-[#0f172a] text-white font-bold rounded-lg hover:bg-slate-800 hover:border-slate-500 transition-all flex items-center justify-center shadow-lg"><i data-lucide="activity" class="mr-2 h-5 w-5"></i> Live Dashboard</button>
+                                <button onclick="window.handleDashboardAccess()" class="px-8 py-4 border border-slate-600 bg-[#0f172a] text-white font-bold rounded-lg hover:bg-slate-800 hover:border-slate-500 transition-all flex items-center justify-center shadow-lg"><i data-lucide="activity" class="mr-2 h-5 w-5"></i> Live Dashboard</button>
                                 <button onclick="window.nav('about')" class="px-8 py-4 border border-slate-600 bg-[#1e293b] text-white font-bold rounded-lg hover:bg-slate-700 hover:border-slate-500 transition-all flex items-center justify-center shadow-lg">About DC</button>
                             </div>
                         </div>
@@ -1310,7 +1358,7 @@
                                 </button>
                                 
                                 <div class="relative">
-                                    <button onclick="window.toggleProjectMenu()" class="px-5 py-2.5 bg-indigo-600/90 hover:bg-indigo-600 text-white font-bold rounded-sm shadow-lg flex items-center text-sm transition-all border border-indigo-500/50 backdrop-blur-sm">
+                                    <button onclick="window.handleProjectMenuAccess()" class="px-5 py-2.5 bg-indigo-600/90 hover:bg-indigo-600 text-white font-bold rounded-sm shadow-lg flex items-center text-sm transition-all border border-indigo-500/50 backdrop-blur-sm">
                                         <i data-lucide="kanban-square" class="mr-2 h-4 w-4"></i> Monitoring Project <i data-lucide="chevron-down" class="ml-2 h-4 w-4"></i>
                                     </button>
                                     ${AppState.projectMenuOpen ? `
@@ -1340,7 +1388,56 @@
         function renderKeyFunctions() { return `<section id="functions" class="py-20 bg-slate-50"><div class="max-w-7xl mx-auto px-4 text-center mb-16"><h2 class="text-3xl md:text-4xl font-bold text-slate-900 mb-4">Key Operational Functions</h2><div class="w-24 h-1 bg-orange-500 mx-auto rounded-full"></div></div><div class="max-w-7xl mx-auto px-4 grid grid-cols-1 md:grid-cols-3 gap-8">${[{icon:'truck',t:'Strategic Transit Hub',d:'Primary consolidation point.'},{icon:'database',t:'Buffer Stock Center',d:'Managing volatility.'},{icon:'bar-chart-3',t:'Inventory Stabilization',d:'Control tower for MIN-MAX.'}].map(f=>`<div class="bg-white rounded-xl shadow-lg p-8 border-t-4 border-transparent hover:border-orange-500 transition-all"><div class="mb-6 bg-slate-50 w-20 h-20 rounded-full flex items-center justify-center"><i data-lucide="${f.icon}" class="h-10 w-10 text-orange-500"></i></div><h3 class="text-xl font-bold text-slate-900 mb-3">${f.t}</h3><p class="text-slate-600">${f.d}</p></div>`).join('')}</div></section>`; }
         function renderCategories() { return `<section id="categories" class="py-20 bg-slate-900 text-white"><div class="max-w-7xl mx-auto px-4 mb-12"><h2 class="text-3xl font-bold mb-2">Material Categories</h2></div><div class="max-w-7xl mx-auto px-4 grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">${[{n:'Spare Parts',i:'settings',img:'1486262715619-67b85e0b08d3'},{n:'Tyres & Rims',i:'layers',img:'1583258509156-f28822026858'},{n:'Components',i:'cpu',img:'1580894732930-0babd100d356'},{n:'General Supplies',i:'box',img:'1595074474855-f9397f8ef5fd'}].map(c=>`<div class="group relative h-96 rounded-lg overflow-hidden cursor-pointer"><img src="https://images.unsplash.com/photo-${c.img}?auto=format&fit=crop&w=600&q=80" class="absolute inset-0 w-full h-full object-cover transition-transform duration-500 group-hover:scale-110"><div class="absolute inset-0 bg-gradient-to-t from-slate-900 via-slate-900/60 to-transparent opacity-90"></div><div class="absolute bottom-0 left-0 p-6 w-full"><div class="bg-orange-500 w-12 h-12 rounded-lg flex items-center justify-center mb-4"><i data-lucide="${c.i}" class="text-white w-6 h-6"></i></div><h3 class="text-xl font-bold mb-2 border-l-4 border-orange-500 pl-3">${c.n}</h3></div></div>`).join('')}</div></section>`; }
         function renderProcess() { return `<section id="process" class="py-20 bg-white"><div class="max-w-7xl mx-auto px-4 text-center mb-16"><h2 class="text-3xl font-bold text-slate-900">Operational Process Flow</h2></div><div class="max-w-7xl mx-auto px-4 relative"><div class="hidden md:block absolute top-1/2 left-0 w-full h-1 bg-slate-200 -translate-y-1/2 z-0"></div><div class="grid grid-cols-1 md:grid-cols-3 gap-12 relative z-10">${['Incoming & QC', 'Inventory Mgmt', 'Outgoing & Dispatch'].map((t,i) => `<div class="bg-white p-6 rounded-xl border border-slate-100 shadow-lg text-center"><div class="w-16 h-16 ${i===1?'bg-orange-500':'bg-slate-900'} text-white rounded-full flex items-center justify-center text-2xl font-bold mx-auto mb-6 ring-8 ring-white">${i+1}</div><h3 class="text-xl font-bold text-slate-800 mb-3">${t}</h3><p class="text-slate-500 text-sm">Critical procedures ensuring operational excellence.</p></div>`).join('')}</div></div></section>`; }
-        function renderTrackingSection() { return `<section id="tracking" class="py-20 bg-slate-50 border-b border-slate-200"><div class="max-w-7xl mx-auto px-4"><div class="bg-white rounded-2xl shadow-xl overflow-hidden flex flex-col md:flex-row"><div class="md:w-5/12 bg-slate-900 p-10 text-white flex flex-col justify-center"><h2 class="text-3xl font-bold mb-4 flex items-center"><i data-lucide="search" class="mr-3 text-orange-500"></i> Track Shipment</h2><p class="text-slate-300">Monitor real-time status via STO Number.</p></div><div class="md:w-7/12 p-10"><form onsubmit="window.handleTrack(event)" class="mb-8"><label class="block text-sm font-bold text-slate-900 mb-2 uppercase">Enter STO Number</label><div class="flex gap-2"><input id="stoInput" type="text" placeholder="e.g. 450012345" class="flex-1 px-4 py-3 border border-slate-300 rounded-sm focus:ring-2 focus:ring-orange-500 outline-none"><button type="submit" class="bg-orange-500 text-white font-bold px-8 py-3 rounded-sm hover:bg-orange-600">Track</button></div></form><div id="trackingResult" class="hidden animate-in"></div></div></div><div id="pending-gr-container">${generatePendingGRHtml()}</div></div></section>`; }
+        
+        function renderTrackingSection() { 
+            return `<section id="tracking" class="py-20 bg-slate-50 border-b border-slate-200">
+                <div class="max-w-7xl mx-auto px-4">
+                    <div class="bg-white rounded-2xl shadow-xl overflow-hidden flex flex-col md:flex-row">
+                        <div class="md:w-5/12 bg-slate-900 p-10 text-white flex flex-col justify-center">
+                            <h2 class="text-3xl font-bold mb-4 flex items-center">
+                                <i data-lucide="search" class="mr-3 text-orange-500"></i> 
+                                Track Shipment
+                            </h2>
+                            <p class="text-slate-300">Monitor real-time status via STO Number.</p>
+                        </div>
+                        <div class="md:w-7/12 p-10">
+                            <!-- Internal Tracking Form -->
+                            <form onsubmit="window.handleTrack(event)" class="mb-6">
+                                <label class="block text-sm font-bold text-slate-900 mb-2 uppercase">Enter STO Number</label>
+                                <div class="flex gap-2">
+                                    <input id="stoInput" type="text" placeholder="e.g. 450012345" class="flex-1 px-4 py-3 border border-slate-300 rounded-sm focus:ring-2 focus:ring-orange-500 outline-none">
+                                    <button type="submit" class="bg-orange-500 text-white font-bold px-8 py-3 rounded-sm hover:bg-orange-600">Track</button>
+                                </div>
+                            </form>
+
+                            <!-- External Tracking Dropdown -->
+                            <div class="mb-8 pt-4 border-t border-slate-100">
+                                <label class="block text-xs font-bold text-slate-400 mb-2 uppercase flex items-center">
+                                    <i data-lucide="globe" class="w-3 h-3 mr-1"></i> External Provider Tracking
+                                </label>
+                                <div class="relative group">
+                                    <select onchange="if(this.value) { window.open(this.value, '_blank'); this.value=''; }" class="w-full px-4 py-3 bg-slate-50 border border-slate-300 rounded-sm focus:ring-2 focus:ring-blue-500 outline-none appearance-none cursor-pointer text-slate-700 font-medium hover:bg-white transition-colors">
+                                        <option value="" selected disabled>Pilih Jasa Ekspedisi (JNE, JNT, dll)...</option>
+                                        <option value="https://jet.co.id/track">J&T Express (JNT)</option>
+                                        <option value="https://jne.co.id/tracking-package">JNE</option>
+                                        <option value="https://tiki.id/id/track">TIKI</option>
+                                        <option value="https://lionparcel.com/track">Lion Parcel</option>
+                                        <option value="https://www.jtcargo.id/">J&T Cargo</option>
+                                    </select>
+                                    <div class="absolute inset-y-0 right-0 flex items-center px-4 pointer-events-none text-slate-500 group-hover:text-blue-500">
+                                        <i data-lucide="chevron-down" class="w-4 h-4"></i>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <div id="trackingResult" class="hidden animate-in"></div>
+                        </div>
+                    </div>
+                    <div id="pending-gr-container">${generatePendingGRHtml()}</div>
+                </div>
+            </section>`; 
+        }
+
         function renderContact() { return `<section id="contact" class="py-20 bg-slate-900 text-white"><div class="max-w-7xl mx-auto px-4 grid grid-cols-1 md:grid-cols-2 gap-16"><div><h2 class="text-3xl font-bold mb-6">Contact Control Tower</h2><div class="space-y-6"><div class="flex items-start"><i data-lucide="map-pin" class="w-6 h-6 text-orange-500 mr-4"></i><div><h4 class="font-bold">DC Palaran Main Hub</h4><p class="text-slate-400 text-sm">Jl. Trikora, Palaran, Samarinda</p></div></div><div class="flex items-center"><i data-lucide="phone" class="w-6 h-6 text-orange-500 mr-4"></i><div><h4 class="font-bold">Ariansyah Supu</h4><p class="text-slate-400 text-sm">+62 812-4379-7285</p></div></div></div></div><div class="bg-white rounded-lg p-8 text-slate-900"><h3 class="text-2xl font-bold text-slate-900 mb-6">Quick Stock Check</h3><form onsubmit="window.handleStockCheck(event)" class="space-y-4"><div><label class="block text-sm font-bold mb-2">Project Site</label><select name="site" class="w-full px-4 py-3 bg-slate-100 border-none rounded-sm"><option value="" disabled selected>Select Site...</option>${[{code: "PL01", name: "MSJ"}, {code: "PL03", name: "BE"}, {code: "PL06", name: "KALSEL"}, {code: "PL09", name: "MME"}, {code: "PL14", name: "TJP"}, {code: "PL15", name: "GAM"}, {code: "PL18", name: "ABP"}, {code: "PL19", name: "GSP"}, {code: "PL22", name: "MRW"}].map(p=>`<option value="${p.name} (${p.code})">${p.name} (${p.code})</option>`).join('')}</select></div><div><label class="block text-sm font-bold mb-2">Search By</label><div class="flex gap-4 mb-2"><label class="flex items-center space-x-2"><input type="radio" name="type" value="Material Number" checked><span>Material Number</span></label><label class="flex items-center space-x-2"><input type="radio" name="type" value="Part Number"><span>Part Number</span></label></div><input name="item" type="text" class="w-full px-4 py-3 bg-slate-100 border-none rounded-sm" placeholder="Enter Number..." required></div><button type="submit" class="w-full bg-green-600 text-white font-bold py-3 rounded-sm hover:bg-green-700 flex items-center justify-center"><i data-lucide="send" class="w-4 h-4 mr-2"></i> Check Stock via WhatsApp</button></div></section>`; }
         function renderFooter() { return `<footer class="bg-slate-950 text-slate-400 py-8 text-center"><p>&copy; 2025 DC Palaran. All rights reserved.</p></footer>`; }
         function renderAnalysisLanding() {
@@ -1431,6 +1528,31 @@
                 }
             }
             return `<div class="min-h-screen pt-24 pb-12 bg-slate-50 animate-in"><div class="max-w-6xl mx-auto px-4"><button onclick="window.nav('home')" class="mb-6 flex items-center text-slate-500 hover:text-orange-600 font-medium text-sm"><i data-lucide="arrow-left" class="w-4 h-4 mr-2"></i> Back to Home</button>${sliderHTML}${orgChartHTML}${constructionHTML}</div></div>`;
+        }
+
+        function renderPasswordModal() {
+            if (!AppState.isPasswordModalOpen) return '';
+            return `
+            <div class="fixed inset-0 z-[100] flex items-center justify-center bg-black/80 backdrop-blur-sm animate-in fade-in">
+                <div class="bg-white rounded-2xl p-8 max-w-sm w-full shadow-2xl transform scale-100 transition-all">
+                    <div class="text-center mb-6">
+                        <div class="bg-slate-100 p-4 rounded-full inline-flex mb-4">
+                            <i data-lucide="lock" class="w-8 h-8 text-slate-700"></i>
+                        </div>
+                        <h3 class="text-xl font-bold text-slate-900">Enter Access Code</h3>
+                        <p class="text-sm text-slate-500">Restricted Area</p>
+                    </div>
+                    <form onsubmit="window.submitGlobalPassword(event)">
+                        <input type="password" id="globalPasswordInput" class="w-full px-4 py-3 bg-slate-50 border ${AppState.passwordError ? 'border-red-500 focus:ring-red-500' : 'border-slate-300 focus:ring-orange-500'} rounded-lg text-center font-bold text-lg tracking-widest mb-2 outline-none focus:ring-2" placeholder="••••" maxlength="4" autocomplete="off">
+                        ${AppState.passwordError ? '<p class="text-xs text-red-500 text-center mb-4 font-bold">Incorrect Password</p>' : '<div class="h-4 mb-4"></div>'}
+                        <div class="flex gap-3">
+                            <button type="button" onclick="window.closePasswordModal()" class="flex-1 px-4 py-2 text-slate-600 font-bold hover:bg-slate-100 rounded-lg">Cancel</button>
+                            <button type="submit" class="flex-1 px-4 py-2 bg-slate-900 text-white font-bold rounded-lg hover:bg-slate-800">Unlock</button>
+                        </div>
+                    </form>
+                </div>
+            </div>
+            `;
         }
 
         // --- NEW: BUDGET RENDERER ---
@@ -1968,6 +2090,12 @@
             } else if (AppState.currentView === 'plan2026') {
                 root.insertAdjacentHTML('beforeend', renderActivityPlan2026());
             }
+            
+            // Password Modal Rendering
+            if (AppState.isPasswordModalOpen) {
+                root.insertAdjacentHTML('beforeend', renderPasswordModal());
+            }
+
             renderIcons();
 
             if (AppState.currentView === 'catalog') {
@@ -2073,6 +2201,12 @@
         window.downloadPendingGRExcel = downloadPendingGRExcelAction;
         window.downloadReminderGRExcel = downloadReminderGRExcelAction; 
         window.downloadOnTrackGRExcel = downloadOnTrackGRExcelAction; // New Action
+
+        // --- NEW PASSWORD ACTIONS ---
+        window.handleDashboardAccess = handleDashboardAccess;
+        window.handleProjectMenuAccess = handleProjectMenuAccess;
+        window.closePasswordModal = closePasswordModal;
+        window.submitGlobalPassword = submitGlobalPassword;
 
         // --- 9. INIT ---
         render();
