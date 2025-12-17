@@ -431,7 +431,8 @@
         let selectedItem = null;
         let currentBinCode = null;
         let currentTrxType = "OUT"; 
-        let html5Qrcode = null; // Ganti Scanner UI dengan class Core
+        let html5Qrcode = null; 
+        let isScannerRunning = false; // State untuk mencegah error stop
 
         document.addEventListener('DOMContentLoaded', () => {
             document.getElementById('year').textContent = new Date().getFullYear();
@@ -461,28 +462,34 @@
         function startScanner() {
             document.getElementById('scannerModal').style.display = 'flex';
             
-            // Gunakan Html5Qrcode class untuk kontrol penuh (kamera belakang langsung)
             if (!html5Qrcode) {
                 html5Qrcode = new Html5Qrcode("reader");
             }
             
+            if (isScannerRunning) return;
+
             const config = { fps: 10, qrbox: { width: 250, height: 250 } };
             
-            // Preferensi kamera belakang: { facingMode: "environment" }
             html5Qrcode.start({ facingMode: "environment" }, config, onScanSuccess)
+            .then(() => {
+                isScannerRunning = true;
+            })
             .catch(err => {
                 console.error("Error starting scanner", err);
+                isScannerRunning = false;
                 alert("Gagal membuka kamera: " + err);
                 document.getElementById('scannerModal').style.display = 'none';
             });
         }
 
         function stopScanner() {
-            if (html5Qrcode) {
+            if (html5Qrcode && isScannerRunning) {
                 html5Qrcode.stop().then(() => {
+                    isScannerRunning = false;
                     document.getElementById('scannerModal').style.display = 'none';
                 }).catch(err => {
                     console.log("Stop failed: ", err);
+                    isScannerRunning = false; 
                     document.getElementById('scannerModal').style.display = 'none';
                 });
             } else {
@@ -518,13 +525,11 @@
                 const data = await response.json();
                 
                 if (!data || data.length === 0) {
-                    // Jika kosong, tampilkan alert (ini wajar karena tidak ada data)
                     alert(`Data tidak ditemukan untuk BIN: ${binCode}.`);
                     showHomeState();
                 } else {
                     binItemsCache = data;
                     populateMaterialDropdown(data);
-                    // Langsung masuk ke pemilihan material
                     showMaterialSelectState();
                 }
             } catch (err) {
@@ -541,7 +546,6 @@
             
             let optionsHTML = '<option value="" disabled selected>-- Pilih Material --</option>';
             items.forEach((item, index) => {
-                // Tampilkan Kode Material saja sesuai permintaan agar simple
                 optionsHTML += `<option value="${index}">${item.material} - ${item.desc}</option>`;
             });
             selectEl.innerHTML = optionsHTML;
