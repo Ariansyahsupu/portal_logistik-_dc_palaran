@@ -202,11 +202,12 @@
         .btn-primary:disabled { background-color: #9ca3af; cursor: not-allowed; }
         
         .btn-scan { 
-            width: 100%; padding: 20px; background-color: var(--secondary); margin-bottom: 15px;
-            color: white; border: none; border-radius: 8px; font-weight: 700; cursor: pointer; display: flex; align-items: center; justify-content: center; gap: 10px; font-size: 1.2rem;
-            box-shadow: 0 4px 6px -1px rgba(0,0,0,0.1);
+            width: 100%; padding: 25px; background-color: var(--secondary); margin-bottom: 15px;
+            color: white; border: none; border-radius: 12px; font-weight: 700; cursor: pointer; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 15px; font-size: 1.2rem;
+            box-shadow: 0 4px 6px -1px rgba(0,0,0,0.1); transition: transform 0.1s;
         }
-        .btn-scan:hover { background-color: #374151; }
+        .btn-scan:active { transform: scale(0.98); }
+        .btn-scan svg { width: 40px; height: 40px; }
 
         /* Badges */
         .status-badge { padding: 4px 10px; border-radius: 9999px; font-size: 0.8rem; font-weight: 600; text-transform: uppercase; display: inline-block; }
@@ -253,20 +254,20 @@
             </div>
         </div>
 
-        <!-- 1. SELECT BIN (HOME) -->
+        <!-- 1. SELECT BIN (HOME) - SIMPLE SCAN ONLY -->
         <div id="homeState" class="card hidden">
-            <div style="padding: 60px 20px; text-align: center;">
+            <div style="padding: 80px 20px; text-align: center;">
                 
-                <h3 style="margin-bottom: 30px; color: var(--secondary);">Distribution Center<br>Inventory Control</h3>
+                <h3 style="margin-bottom: 40px; color: var(--secondary); font-size: 1.2rem;">Inventory Control<br>Distribution Center</h3>
 
-                <!-- NEW: Tombol Scan QR yang Dominan & Satu-satunya -->
+                <!-- TOMBOL SCAN QR BESAR -->
                 <button id="btnStartScan" class="btn-scan">
-                    <svg width="32" height="32" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v1m6 11h2m-6 0h-2v4m0-11v3m0 0h.01M12 12h4.01M16 20h4M4 12h4m12 0h.01M5 8h2a1 1 0 001-1V5a1 1 0 00-1-1H5a1 1 0 00-1 1v2a1 1 0 001 1zm12 0h2a1 1 0 001-1V5a1 1 0 00-1-1h-2a1 1 0 00-1 1v2a1 1 0 001 1zM5 20h2a1 1 0 001-1v-2a1 1 0 00-1-1H5a1 1 0 00-1 1v2a1 1 0 001 1z"></path></svg>
+                    <svg width="48" height="48" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v1m6 11h2m-6 0h-2v4m0-11v3m0 0h.01M12 12h4.01M16 20h4M4 12h4m12 0h.01M5 8h2a1 1 0 001-1V5a1 1 0 00-1-1H5a1 1 0 00-1 1v2a1 1 0 001 1zm12 0h2a1 1 0 001-1V5a1 1 0 00-1-1h-2a1 1 0 00-1 1v2a1 1 0 001 1zM5 20h2a1 1 0 001-1v-2a1 1 0 00-1-1H5a1 1 0 00-1 1v2a1 1 0 001 1z"></path></svg>
                     SCAN QR RAK
                 </button>
 
                 <p style="margin-top: 20px; color: var(--text-muted); font-size: 0.9rem;">
-                    Arahkan kamera ke label QR Code di rak<br>untuk membuka kartu stok.
+                    Pastikan berada di dekat Rak/Bin<br>dan cahaya cukup terang.
                 </p>
 
             </div>
@@ -280,7 +281,7 @@
             </div>
             <div style="padding: 30px 20px; text-align: center;">
                 <p style="margin-bottom: 16px; color: var(--text-muted); font-size: 0.9rem;">
-                    Ditemukan <strong id="materialCount" style="color:var(--text-main)">0</strong> material.
+                    Ditemukan <strong id="materialCount" style="color:var(--text-main)">0</strong> material di lokasi ini.
                 </p>
                 <div style="max-width: 350px; margin: 0 auto;">
                     <select id="materialInput" class="form-select">
@@ -432,7 +433,7 @@
         let currentBinCode = null;
         let currentTrxType = "OUT"; 
         let html5Qrcode = null; 
-        let isScannerRunning = false; // State untuk mencegah error stop
+        let isScannerRunning = false;
 
         document.addEventListener('DOMContentLoaded', () => {
             document.getElementById('year').textContent = new Date().getFullYear();
@@ -458,7 +459,7 @@
             }
         });
 
-        // --- SCANNER LOGIC (LANGSUNG KAMERA BELAKANG) ---
+        // --- SCANNER LOGIC ---
         function startScanner() {
             document.getElementById('scannerModal').style.display = 'flex';
             
@@ -498,15 +499,12 @@
         }
 
         function onScanSuccess(decodedText, decodedResult) {
-            // Hentikan scanner
             stopScanner();
-            // Langsung proses TANPA Alert
             proceedToBin(decodedText);
         }
 
         // --- MAIN LOGIC ---
         function proceedToBin(binCode) {
-            // Update URL
             try {
                 const newUrl = `${window.location.pathname}?bin=${encodeURIComponent(binCode)}`;
                 window.history.pushState({path:newUrl},'',newUrl);
