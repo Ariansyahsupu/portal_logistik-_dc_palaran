@@ -77,6 +77,7 @@
         const AppState = { 
             currentView: 'home',
             dashboardMode: 'selection', // 'selection', 'utilization', 'inventory'
+            dashboardDataFetched: false,
             navbarScrolled: false, 
             mobileMenuOpen: false,
             projectMenuOpen: false, 
@@ -282,6 +283,8 @@
 
         // --- 4. DATA LOGIC & ACTIONS ---
         const fetchDashboardDataAction = async () => {
+            AppState.dashboardDataFetched = true;
+            // Mock items hanya digunakan jika FETCH GAGAL (Error), bukan jika data kosong
             const mockPendingItems = [{ sto: '4500123456', project: 'PL01 MSJ', days: 45, date: '2023-10-01' }];
             const mockReminderItems = [{ sto: '4500987654', project: 'PL03 BE', days: 14, date: '2023-10-20' }];
             const mockOnTrackItems = [{ sto: '4500112233', project: 'PL06 KALSEL', days: 3, date: '2023-11-01' }]; 
@@ -320,9 +323,9 @@
                         }
                     });
 
-                    // FIX: Hapus fallback mockPendingItems. Gunakan data asli (walaupun kosong).
+                    // PERBAIKAN: Menggunakan data asli meskipun kosong (menghapus fallback mockPendingItems)
                     AppState.fullPendingGR = pendingItems;
-                    AppState.pendingGR = pendingItems;
+                    AppState.pendingGR = pendingItems; 
                     
                     AppState.fullReminderGR = reminderItems;
                     AppState.reminderGR = reminderItems;
@@ -334,10 +337,10 @@
                 }
             } catch(e) { 
                 console.warn("Alarm Fetch Failed:", e.message); 
-                // Opsional: Jika fetch error, tetap kosongkan atau biarkan mock (tergantung preferensi, di sini saya kosongkan agar tidak bingung)
-                AppState.pendingGR = []; 
-                AppState.reminderGR = [];
-                AppState.onTrackGR = [];
+                // Mock data hanya muncul jika koneksi GAGAL total
+                AppState.pendingGR = mockPendingItems; 
+                AppState.reminderGR = mockReminderItems;
+                AppState.onTrackGR = mockOnTrackItems;
             }
 
             const utilSheetUrl = 'https://docs.google.com/spreadsheets/d/e/2PACX-1vSgvF0NUSq_o9gV90IzgKGAeNiNu3I5KH0D8vde-hHHngl8Pw2HYvPGSdurUe_O0c9LM6aoApnG31TH/pub?gid=1387121170&single=true&output=csv';
@@ -2055,7 +2058,7 @@
                 root.insertAdjacentHTML('beforeend', renderTrackingSection());
                 root.insertAdjacentHTML('beforeend', renderContact());
                 root.insertAdjacentHTML('beforeend', renderFooter());
-                if (AppState.pendingGR.length === 0) fetchDashboardDataAction();
+                if (!AppState.dashboardDataFetched) fetchDashboardDataAction();
             } else if (AppState.currentView === 'dashboard') {
                 // FIX: Menggunakan insertAdjacentHTML langsung agar konsisten dan menghindari isu whitespace pada firstChild
                 root.insertAdjacentHTML('beforeend', renderDashboard());
