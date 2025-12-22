@@ -320,22 +320,24 @@
                         }
                     });
 
+                    // FIX: Hapus fallback mockPendingItems. Gunakan data asli (walaupun kosong).
                     AppState.fullPendingGR = pendingItems;
-                    AppState.pendingGR = pendingItems.length > 0 ? pendingItems : mockPendingItems;
+                    AppState.pendingGR = pendingItems;
                     
                     AppState.fullReminderGR = reminderItems;
-                    AppState.reminderGR = reminderItems.length > 0 ? reminderItems : [];
+                    AppState.reminderGR = reminderItems;
 
                     AppState.fullOnTrackGR = onTrackItems;
-                    AppState.onTrackGR = onTrackItems.length > 0 ? onTrackItems : (pendingItems.length === 0 && reminderItems.length === 0 ? mockOnTrackItems : []);
+                    AppState.onTrackGR = onTrackItems;
 
                     dataUpdated = true;
                 }
             } catch(e) { 
                 console.warn("Alarm Fetch Failed:", e.message); 
-                AppState.pendingGR = mockPendingItems; 
-                AppState.reminderGR = mockReminderItems;
-                AppState.onTrackGR = mockOnTrackItems;
+                // Opsional: Jika fetch error, tetap kosongkan atau biarkan mock (tergantung preferensi, di sini saya kosongkan agar tidak bingung)
+                AppState.pendingGR = []; 
+                AppState.reminderGR = [];
+                AppState.onTrackGR = [];
             }
 
             const utilSheetUrl = 'https://docs.google.com/spreadsheets/d/e/2PACX-1vSgvF0NUSq_o9gV90IzgKGAeNiNu3I5KH0D8vde-hHHngl8Pw2HYvPGSdurUe_O0c9LM6aoApnG31TH/pub?gid=1387121170&single=true&output=csv';
