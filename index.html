@@ -1,9 +1,13 @@
+<!-- 
+    VERSION: DC Palaran Versi.1 
+    STATUS: STABLE (Restore Point)
+-->
 <!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>DC Palaran - Mining Logistics Hub</title>
+    <title>DC Palaran - Mining Logistics Hub (v1.0)</title>
     
     <!-- Tailwind CSS -->
     <script src="https://cdn.tailwindcss.com"></script>
@@ -185,13 +189,31 @@
 
         const parseDateFlexible = (dateStr) => {
             if (!dateStr) return null;
-            let date = new Date(dateStr);
-            if (isNaN(date.getTime())) {
-                const parts = dateStr.split(/[-/]/);
-                if (parts.length === 3) {
-                    date = new Date(`${parts[2]}-${parts[1]}-${parts[0]}`);
+            
+            // LOGIKA KHUSUS: Prioritas Format Indonesia (DD/MM/YYYY)
+            // Spreadsheet biasanya mengirim format ini.
+            const parts = dateStr.trim().split(/[\/\-]/); // Split berdasarkan / atau -
+            
+            if (parts.length === 3) {
+                const p0 = parseInt(parts[0], 10);
+                const p1 = parseInt(parts[1], 10);
+                const p2 = parseInt(parts[2], 10);
+
+                // Cek jika bagian ke-3 adalah Tahun (4 digit), misal: 05/02/2024
+                if (p2 > 1000) {
+                    // Format DD/MM/YYYY
+                    // Note: Constructor Date(y, m, d) bulan dimulai dari 0 (Januari = 0)
+                    return new Date(p2, p1 - 1, p0);
+                } 
+                // Cek jika bagian ke-1 adalah Tahun (4 digit), misal: 2024-02-05
+                else if (p0 > 1000) {
+                    // Format YYYY/MM/DD
+                    return new Date(p0, p1 - 1, p2);
                 }
             }
+
+            // Fallback: Biarkan browser menebak jika format tidak sesuai pola di atas
+            const date = new Date(dateStr);
             return isNaN(date.getTime()) ? null : date;
         };
 
@@ -296,7 +318,35 @@
                 const response = await fetch(alarmSheetUrl);
                 if (response.ok) {
                     const text = await response.text();
-                    const rows = parseCSV(text).slice(1);
+                    // Parse semua baris termasuk header untuk pencarian kolom cerdas
+                    const allRows = parseCSV(text);
+                    
+                    // --- LOGIKA BARU: DETEKSI KOLOM TANGGAL (AI / HEADER) ---
+                    let dateColumnIndex = 34; // Default ke Kolom AI (Index 34)
+                    let siteColumnIndex = 36; // Default ke Kolom AK (Index 36) - Site Tujuan
+                    
+                    if (allRows.length > 0) {
+                        const headerRow = allRows[0];
+                        // Cari header yang mengandung kata "Tanggal Terkirim"
+                        const foundDateIdx = headerRow.findIndex(cell => 
+                            cell && cell.toString().toLowerCase().includes('tanggal terkirim')
+                        );
+                        if (foundDateIdx !== -1) {
+                            dateColumnIndex = foundDateIdx;
+                            console.log(`Column Discovery: 'Tanggal Terkirim' found at index ${dateColumnIndex}`);
+                        }
+
+                        // Cari header yang mengandung kata "Site Tujuan"
+                        const foundSiteIdx = headerRow.findIndex(cell => 
+                            cell && cell.toString().toLowerCase().includes('site tujuan')
+                        );
+                        if (foundSiteIdx !== -1) {
+                            siteColumnIndex = foundSiteIdx;
+                            console.log(`Column Discovery: 'Site Tujuan' found at index ${siteColumnIndex}`);
+                        }
+                    }
+
+                    const rows = allRows.slice(1); // Data mulai dari baris ke-2
                     let pendingItems = [];
                     let reminderItems = []; 
                     let onTrackItems = []; 
@@ -306,8 +356,13 @@
                         if (!row || row.length < 7) return; 
                         const sto = row[6];
                         if(!sto) return;
-                        const project = (row[35] && row[35] !== 'undefined') ? row[35] : 'Unknown';
-                        const dateStr = row[0]; 
+                        
+                        // Update: Mengambil Project/Site dari Index yang ditentukan (AK/36) atau Header "Site Tujuan"
+                        const project = (row[siteColumnIndex] && row[siteColumnIndex] !== 'undefined') ? row[siteColumnIndex] : 'Unknown';
+                        
+                        // MENGGUNAKAN KOLOM YANG BARU DITENTUKAN (AI/HEADER)
+                        const dateStr = row[dateColumnIndex]; 
+
                         if (dateStr) {
                             const sentDate = parseDateFlexible(dateStr);
                             if (sentDate) {
@@ -358,6 +413,21 @@
                     if (idxWeek === -1) idxWeek = 12; 
                     let idxDate = 1; 
 
+                    // --- PERBAIKAN: SMART COLUMN DISCOVERY (SITE & VALUE) ---
+                    // Mencari kolom 'Site'/'Plant'/'Project' agar tidak salah baca Rp420.000 sebagai Nama
+                    let idxSite = headers.findIndex(h => h === 'site' || h.includes('plant') || h === 'project' || h.includes('nama project') || h.includes('site name'));
+                    if (idxSite === -1) idxSite = 8; // Fallback jika header tidak ditemukan
+
+                    // Mencari kolom 'DPP'/'Amount'/'Total' untuk Nilai Uang
+                    let idxValue = headers.findIndex(h => h.includes('dpp') || h.includes('amount') || h.includes('total price') || h.includes('net value'));
+                    if (idxValue === -1) idxValue = 10; // Fallback
+
+                    // Mencari kolom Kategori
+                    let idxCategory = headers.findIndex(h => h.includes('category') || h.includes('kategori') || h.includes('description'));
+                    if (idxCategory === -1) idxCategory = 11;
+
+                    console.log(`Mapping Detected -> Site: ${idxSite}, Value: ${idxValue}, Category: ${idxCategory}`);
+
                     const rowsUtil = rowsAll.slice(1);
                     const siteMap = new Map();
                     const monthMap = new Map(); 
@@ -367,8 +437,17 @@
                     
                     AppState.nonSohData = [];
                     rowsUtil.forEach(row => {
-                          if(!row[8] || !row[10]) return;
-                        let siteName = row[8].trim();
+                          // Gunakan index dinamis (idxSite & idxValue) bukan angka mati (8 & 10)
+                          if(!row[idxSite] || !row[idxValue]) return;
+                        
+                        let siteName = row[idxSite].trim();
+                        
+                        // Filter jika siteName malah berisi angka (safety check tambahan)
+                        if (siteName.startsWith('Rp') || !isNaN(parseFloat(siteName.replace(/[.,]/g,'')))) {
+                             // Jika terdeteksi angka, coba geser -1 atau +1 (darurat)
+                             if (row[idxSite-1] && isNaN(parseFloat(row[idxSite-1]))) siteName = row[idxSite-1];
+                        }
+
                         const upperSite = siteName.toUpperCase();
                         if (upperSite.includes("PL08") || upperSite.includes("DC PALARAN")) { siteName = "CMX PLRN"; } 
                         else if (upperSite.includes("PL26") || upperSite.includes("MHU")) { siteName = "MHU"; } 
@@ -377,10 +456,14 @@
                         else { const match = siteName.match(/PL\d+\s*\(([^)]+)\)/i); if (match && match[1]) { siteName = match[1].trim(); } }
 
                         const siteKey = normalizeString(siteName); 
-                        let cleanVal = row[10].replace(/[Rp\s.]/g, '').replace(',', '.');
+                        
+                        // Ambil nilai dari kolom Value yang ditemukan
+                        let cleanVal = row[idxValue].replace(/[Rp\s.]/g, '').replace(',', '.');
                         const rowValue = parseFloat(cleanVal) || 0;
                         const dateRaw = row[idxDate]; 
-                        let categoryName = row[11] ? row[11].trim() : "Uncategorized";
+                        
+                        // Ambil kategori
+                        let categoryName = row[idxCategory] ? row[idxCategory].trim() : "Uncategorized";
                         const lowerCat = categoryName.toLowerCase();
 
                         if (lowerCat.includes("non soh")) { categoryName = "Part Non SOH"; } 
@@ -390,6 +473,7 @@
                         categoryMap.set(categoryName, categoryMap.get(categoryName) + rowValue);
 
                         if (categoryName === "Part Non SOH") {
+                            // Description ambil dari kolom category atau fallback row[3]
                             AppState.nonSohData.push({ "Date": row[1] || "-", "Description": row[3] || "-", "Site": siteName, "Category": categoryName, "Amount": rowValue, "Week": row[idxWeek] || "-" });
                         }
 
@@ -904,7 +988,7 @@
                             const rawAch = (rows[i].length > 18) ? (rows[i][18] || '0') : '0';
                             if (name !== '' && name !== '-') {
                                 details.push({
-                                    name: name,      
+                                    name: name,       
                                     achievement: parseVal(rawAch)
                                 });
                             }
@@ -1252,7 +1336,7 @@
             window.nav('catalog'); // Re-render the catalog page with initial state
         };
 
-        // --- 5. COMPONENT GENERATORS ---
+   // --- 5. COMPONENT GENERATORS ---
         function generatePendingGRHtml() {
             // Helper to generate list items
             const generateList = (items, colorClass, textClass) => {
@@ -1346,7 +1430,7 @@
                 </div>`;
         }
 
-        // --- 6. RENDERERS ---
+  // --- 6. RENDERERS ---
         function renderNavbar() {
             const bg = AppState.navbarScrolled ? 'bg-slate-900 shadow-lg py-3' : 'bg-transparent py-5';
             return `<nav class="fixed w-full z-50 transition-all duration-300 ${bg}"><div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 flex justify-between items-center"><div class="flex items-center space-x-2 cursor-pointer" onclick="window.nav('home')"><div class="bg-orange-500 p-2 rounded-lg"><i data-lucide="warehouse" class="h-6 w-6 text-white"></i></div><div class="flex flex-col"><span class="text-xl font-bold tracking-tighter text-white">DC PALARAN</span><span class="text-xs text-orange-400 font-medium tracking-widest">Mining Logistics Hub</span></div></div><div class="hidden lg:flex items-center space-x-6"><button onclick="window.nav('home')" class="text-slate-200 hover:text-orange-500 font-medium text-sm uppercase">Home</button><button onclick="window.nav('about')" class="text-slate-200 hover:text-orange-500 font-medium text-sm uppercase">About</button><button onclick="window.nav('analysis')" class="text-slate-200 hover:text-orange-500 font-medium text-sm uppercase">Analysis Tools</button><button onclick="window.nav('home', 'functions')" class="text-slate-200 hover:text-orange-500 font-medium text-sm uppercase">Functions</button><button onclick="window.nav('home', 'process')" class="text-slate-200 hover:text-orange-500 font-medium text-sm uppercase">Process</button><button onclick="window.nav('home', 'tracking')" class="text-slate-200 hover:text-orange-500 font-medium text-sm uppercase">Tracking</button><button onclick="window.nav('catalog')" class="text-slate-200 hover:text-orange-500 font-medium text-sm uppercase flex items-center"><i data-lucide="file-text" class="w-4 h-4 mr-1"></i> Catalog</button><button onclick="window.handleDashboardAccess()" class="text-slate-200 hover:text-orange-500 font-medium text-sm uppercase flex items-center"><i data-lucide="layout-dashboard" class="w-4 h-4 mr-1"></i> Dashboard</button></div><div class="lg:hidden"><button onclick="window.toggleMenu()" class="text-white"><i data-lucide="menu" class="h-8 w-8"></i></button></div></div>${AppState.mobileMenuOpen ? `<div class="lg:hidden bg-slate-900 border-t border-slate-800 p-4 space-y-2"><button onclick="window.nav('home')" class="block text-slate-300 py-2">Home</button><button onclick="window.handleDashboardAccess()" class="block text-slate-300 py-2">Dashboard</button></div>` : ''}</nav>`;
@@ -1905,6 +1989,8 @@
             </div>`;
         }
 
+        // --- 7. MAIN RENDER & INIT ---
+        
         function renderInventoryDashboard() {
             // Check loading state
             if (AppState.inventoryData.loading) {
@@ -2094,6 +2180,7 @@
         }
 
         function renderDashboard() {
+            // Dashboard Routing Logic
             if (AppState.dashboardMode === 'selection') {
                 return renderDashboardSelection();
             } else if (AppState.dashboardMode === 'utilization') {
@@ -2105,7 +2192,7 @@
         }
 
         // --- 7. MAIN RENDER FUNCTION ---
-        function render() {
+        const render = () => {
             const root = document.getElementById('app-root');
             root.innerHTML = '';
             root.insertAdjacentHTML('beforeend', renderNavbar());
@@ -2121,7 +2208,7 @@
                 root.insertAdjacentHTML('beforeend', renderFooter());
                 if (!AppState.dashboardDataFetched) fetchDashboardDataAction();
             } else if (AppState.currentView === 'dashboard') {
-                // FIX: Menggunakan insertAdjacentHTML langsung agar konsisten dan menghindari isu whitespace pada firstChild
+                // FIX: Menggunakan insertAdjacentHTML langsung agar konsisten
                 root.insertAdjacentHTML('beforeend', renderDashboard());
             } else if (AppState.currentView === 'catalog') {
                 root.insertAdjacentHTML('beforeend', renderCatalog());
@@ -2191,9 +2278,9 @@
                     statusEl.classList.remove('text-slate-400');
                 }
             }
-        }
+        };
         
-        // Add scroll listener for navbar (Restored)
+        // Add scroll listener for navbar
         window.addEventListener('scroll', () => {
             const isScrolled = window.scrollY > 20;
             if (AppState.navbarScrolled !== isScrolled) {
@@ -2254,7 +2341,9 @@
         window.submitGlobalPassword = submitGlobalPassword;
 
         // --- 9. INIT ---
-        render();
+        startImageSlider();
+        console.log("System Loaded: DC Palaran Versi.1"); // Version Marker
+        render(); 
 
     </script>
 </body>
