@@ -1,13 +1,13 @@
 <!-- 
-    VERSION: DC Palaran Versi.1 
-    STATUS: STABLE (Restore Point)
+    VERSION: DC Palaran Versi 1.1 
+    STATUS: STABLE & CONSOLIDATED + Monitoring In-Transit
 -->
 <!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>DC Palaran - Mining Logistics Hub (v1.0)</title>
+    <title>DC Palaran - Mining Logistics Hub (v1.1)</title>
     
     <!-- Tailwind CSS -->
     <script src="https://cdn.tailwindcss.com"></script>
@@ -15,11 +15,17 @@
     <!-- Lucide Icons -->
     <script src="https://unpkg.com/lucide@latest"></script>
     
+    <!-- Phosphor Icons (Requested) -->
+    <script src="https://unpkg.com/@phosphor-icons/web"></script>
+    
+    <!-- Chart.js (Requested) -->
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    
     <!-- XLSX Library -->
     <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 
     <!-- Google Fonts -->
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=Plus+Jakarta+Sans:wght@500;600;700&display=swap" rel="stylesheet">
 
     <style>
         body { font-family: 'Inter', sans-serif; }
@@ -39,6 +45,12 @@
         /* Slider Styles */
         .slide { position: absolute; inset: 0; opacity: 0; transition: opacity 1s ease-in-out; }
         .slide.active { opacity: 1; }
+
+        /* NEW: Monitoring In-Transit Styles */
+        .glass-card { background: rgba(17, 24, 39, 0.8); backdrop-filter: blur(12px); border: 1px solid rgba(255, 255, 255, 0.1); border-radius: 16px; }
+        .chart-container { position: relative; height: 450px; width: 100%; }
+        /* Font Display for Monitoring Section */
+        .font-display { font-family: 'Plus Jakarta Sans', sans-serif; }
     </style>
 </head>
 <body class="bg-slate-50 text-slate-900 selection:bg-orange-500 selection:text-white">
@@ -80,7 +92,7 @@
         // --- 2. STATE MANAGEMENT ---
         const AppState = { 
             currentView: 'home',
-            dashboardMode: 'selection', // 'selection', 'utilization', 'inventory'
+            dashboardMode: 'selection', 
             dashboardDataFetched: false,
             navbarScrolled: false, 
             mobileMenuOpen: false,
@@ -115,11 +127,7 @@
             budgetLoading: false,
             budgetData: { 
                 totalAll: 0, 
-                siteGroups: {
-                    'DC PLRN': { total: 0, items: [] },
-                    'CPLRN': { total: 0, items: [] },
-                    'Depo SMD': { total: 0, items: [] }
-                },
+                siteGroups: { 'DC PLRN': { total: 0, items: [] }, 'CPLRN': { total: 0, items: [] }, 'Depo SMD': { total: 0, items: [] } },
                 aggregatedCosts: [] 
             },
             // Inventory Dashboard Data
@@ -128,26 +136,25 @@
                 loaded: false,
                 dc: { unrestricted: 0, inTransit: 0 },
                 cplrn: { unrestricted: 0, inTransit: 0 },
-                depoSMD: { unrestricted: 0, inTransit: 0 }, // Added Depo SMD state
+                depoSMD: { unrestricted: 0, inTransit: 0 },
                 totalValue: 0
             },
+            // Utilization Year
+            utilizationYear: null,
+            rawUtilData: [],
             // Security State
             isPasswordModalOpen: false,
-            pendingAction: null, // 'dashboard' or 'projectMenu'
+            pendingAction: null,
             passwordError: false
         };
 
         // --- 3. UTILITIES ---
         const formatIDR = (val) => new Intl.NumberFormat('id-ID', { style: 'currency', currency: 'IDR', maximumFractionDigits: 0 }).format(val);
-        
         const normalizeString = (str) => String(str).toUpperCase().replace(/[^A-Z0-9]/g, '');
         
         const renderIcons = (retries = 0) => { 
-            if (window.lucide) {
-                window.lucide.createIcons(); 
-            } else if (retries < 20) { 
-                setTimeout(() => renderIcons(retries + 1), 100); 
-            }
+            if (window.lucide) { window.lucide.createIcons(); } 
+            else if (retries < 20) { setTimeout(() => renderIcons(retries + 1), 100); }
         };
 
         const parseCSV = (text) => {
@@ -156,7 +163,7 @@
                  const char = text[i];
                  if (char === '"' && text[i+1] === '"') { currentCell += '"'; i++; }
                  else if (char === '"') inQuotes = !inQuotes;
-                 else if (char === ',' && !inQuotes) { currentRow.push(currentCell.trim()); currentCell = ''; }
+                 else if ((char === ',' || char === ';') && !inQuotes) { currentRow.push(currentCell.trim()); currentCell = ''; }
                  else if ((char === '\n' || char === '\r') && !inQuotes) {
                      if (currentCell || currentRow.length) rows.push(currentRow);
                      currentRow = []; currentCell = '';
@@ -170,18 +177,11 @@
             if (!str) return 0;
             str = str.toString().trim();
             if (str === '-' || str === '') return 0;
-            
             const isNegative = str.includes('(') && str.includes(')');
-            
             let cleanStr = str.replace(/[^0-9,.-]/g, '');
-
             if ((cleanStr.match(/\./g) || []).length > 1 || (cleanStr.includes('.') && cleanStr.indexOf('.') < cleanStr.length - 3)) {
-                cleanStr = cleanStr.replace(/\./g, ''); 
-                cleanStr = cleanStr.replace(',', '.');  
-            } else if (cleanStr.includes(',')) {
-                cleanStr = cleanStr.replace(/,/g, '');
-            }
-
+                cleanStr = cleanStr.replace(/\./g, ''); cleanStr = cleanStr.replace(',', '.');  
+            } else if (cleanStr.includes(',')) { cleanStr = cleanStr.replace(/,/g, ''); }
             let val = parseFloat(cleanStr);
             if (isNaN(val)) return 0;
             return isNegative ? -val : val;
@@ -189,57 +189,27 @@
 
         const parseDateFlexible = (dateStr) => {
             if (!dateStr) return null;
-            
-            // LOGIKA KHUSUS: Prioritas Format Indonesia (DD/MM/YYYY)
-            // Spreadsheet biasanya mengirim format ini.
-            const parts = dateStr.trim().split(/[\/\-]/); // Split berdasarkan / atau -
-            
+            const parts = dateStr.trim().split(/[\/\-]/);
             if (parts.length === 3) {
                 const p0 = parseInt(parts[0], 10);
                 const p1 = parseInt(parts[1], 10);
                 const p2 = parseInt(parts[2], 10);
-
-                // Cek jika bagian ke-3 adalah Tahun (4 digit), misal: 05/02/2024
-                if (p2 > 1000) {
-                    // Format DD/MM/YYYY
-                    // Note: Constructor Date(y, m, d) bulan dimulai dari 0 (Januari = 0)
-                    return new Date(p2, p1 - 1, p0);
-                } 
-                // Cek jika bagian ke-1 adalah Tahun (4 digit), misal: 2024-02-05
-                else if (p0 > 1000) {
-                    // Format YYYY/MM/DD
-                    return new Date(p0, p1 - 1, p2);
-                }
+                if (p2 > 1000) return new Date(p2, p1 - 1, p0); // DD/MM/YYYY
+                else if (p0 > 1000) return new Date(p0, p1 - 1, p2); // YYYY/MM/DD
             }
-
-            // Fallback: Biarkan browser menebak jika format tidak sesuai pola di atas
             const date = new Date(dateStr);
             return isNaN(date.getTime()) ? null : date;
         };
 
         const getMonthName = (dateStr) => {
             if(!dateStr || typeof dateStr !== 'string' || dateStr.trim() === '') return "Mei-Agustus";
-            
             const cleanStr = dateStr.trim();
             const monthsID = ["Januari", "Februari", "Maret", "April", "Mei", "Juni", "Juli", "Agustus", "September", "Oktober", "November", "Desember"];
             const match = monthsID.find(m => cleanStr.toLowerCase().includes(m.toLowerCase()));
             if(match) return match;
-
             const monthsEN = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
             const idxEN = monthsEN.findIndex(m => cleanStr.toLowerCase().includes(m.toLowerCase()));
             if(idxEN !== -1) return monthsID[idxEN];
-
-            let engDateStr = cleanStr
-                .replace(/Januari/i, 'January').replace(/Februari/i, 'February').replace(/Maret/i, 'March')
-                .replace(/Mei/i, 'May').replace(/Juni/i, 'June').replace(/Juli/i, 'July')
-                .replace(/Agustus/i, 'August').replace(/Oktober/i, 'October').replace(/Desember/i, 'December');
-
-            const date = parseDateFlexible(engDateStr);
-            if(date) {
-                return date.toLocaleString('id-ID', { month: 'long' });
-            }
-
-            if (isNaN(cleanStr) && cleanStr.length > 2) return cleanStr;
             return "Unknown";
         };
 
@@ -254,13 +224,11 @@
             let cumulativePercent = 0;
             const size = 160;
             if (total === 0) return `<div class="h-[160px] w-[160px] flex items-center justify-center text-slate-400 text-xs">No Data</div>`;
-
             const getCoords = (percent) => {
                 const x = Math.cos(2 * Math.PI * percent);
                 const y = Math.sin(2 * Math.PI * percent);
                 return [x, y];
             };
-
             let paths = data.map((slice, i) => {
                 const startPercent = cumulativePercent;
                 const slicePercent = slice.value / total || 0;
@@ -273,7 +241,6 @@
                 const d = `M ${startX} ${startY} A 1 1 0 ${largeArcFlag} 1 ${endX} ${endY} L 0 0`;
                 return `<path d="${d}" fill="${slice.color}" />`;
             }).join('');
-
             return `<div class="relative flex justify-center items-center"><svg viewBox="-1 -1 2 2" width="${size}" height="${size}" style="transform: rotate(-90deg)">${paths}<circle cx="0" cy="0" r="0.6" fill="white" /></svg><div class="absolute inset-0 flex flex-col items-center justify-center text-slate-800"><span class="text-[10px] font-bold uppercase text-slate-400">${centerText}</span><span class="text-xs font-extrabold">${centerValue || formatIDR(total).replace('Rp', '')}</span></div></div>`;
         };
 
@@ -283,28 +250,175 @@
             const radius = (size - strokeWidth) / 2;
             const circumference = radius * 2 * Math.PI;
             const offset = circumference - (percentage / 100) * circumference;
-            
-            return `
-            <div class="flex flex-col items-center justify-center p-4 bg-slate-800 rounded-xl shadow-lg border border-slate-700 w-full">
-                <div class="relative w-24 h-24 mb-3">
-                    <svg viewBox="0 0 100 100" class="w-full h-full transform -rotate-90">
-                        <circle cx="50" cy="50" r="${radius}" stroke="currentColor" stroke-width="${strokeWidth}" fill="transparent" class="text-slate-700" />
-                        <circle cx="50" cy="50" r="${radius}" stroke="${color}" stroke-width="${strokeWidth}" fill="transparent" stroke-dasharray="${circumference}" stroke-dashoffset="${offset}" stroke-linecap="round" class="transition-all duration-1000 ease-out" />
-                    </svg>
-                    <div class="absolute inset-0 flex items-center justify-center text-white">
-                        <i data-lucide="${icon}" class="w-8 h-8 opacity-80"></i>
-                    </div>
-                </div>
-                <div class="text-center">
-                    <span class="block text-2xl font-bold text-white">${percentage.toFixed(1)}%</span>
-                    <span class="text-xs font-bold uppercase tracking-wider text-slate-400">${label}</span>
-                </div>
-            </div>`;
+            return `<div class="flex flex-col items-center justify-center p-4 bg-slate-800 rounded-xl shadow-lg border border-slate-700 w-full"><div class="relative w-24 h-24 mb-3"><svg viewBox="0 0 100 100" class="w-full h-full transform -rotate-90"><circle cx="50" cy="50" r="${radius}" stroke="currentColor" stroke-width="${strokeWidth}" fill="transparent" class="text-slate-700" /><circle cx="50" cy="50" r="${radius}" stroke="${color}" stroke-width="${strokeWidth}" fill="transparent" stroke-dasharray="${circumference}" stroke-dashoffset="${offset}" stroke-linecap="round" class="transition-all duration-1000 ease-out" /></svg><div class="absolute inset-0 flex items-center justify-center text-white"><i data-lucide="${icon}" class="w-8 h-8 opacity-80"></i></div></div><div class="text-center"><span class="block text-2xl font-bold text-white">${percentage.toFixed(1)}%</span><span class="text-xs font-bold uppercase tracking-wider text-slate-400">${label}</span></div></div>`;
         };
 
         const generateReportData = () => [];
 
         // --- 4. DATA LOGIC & ACTIONS ---
+        const processUtilizationData = (year) => {
+            const rowsAll = AppState.rawUtilData;
+            if (!rowsAll || rowsAll.length < 2) return;
+
+            const headers = rowsAll[0].map(h => h.toString().toLowerCase().trim());
+            let idxWeek = headers.findIndex(h => h.includes('week') || h.includes('minggu'));
+            if (idxWeek === -1) idxWeek = 12; 
+            let idxDate = 1; 
+
+            // Smart Column Discovery (Re-used)
+            let idxSite = headers.findIndex(h => h === 'site' || h.includes('plant') || h === 'project' || h.includes('nama project') || h.includes('site name'));
+            if (idxSite === -1) idxSite = 8; 
+            
+            // PERBAIKAN LOGIKA KOLOM: Fokus pada 'Value' (K/10) dan 'Remarks' (L/11)
+            let idxValue = headers.findIndex(h => h === 'value' || h.includes('dpp') || h.includes('amount'));
+            if (idxValue === -1) idxValue = 10; // Default Kolom K
+            
+            let idxCategory = headers.findIndex(h => h === 'remarks' || h.includes('category') || h.includes('kategori'));
+            if (idxCategory === -1) idxCategory = 11; // Default Kolom L
+
+            // --- LOGIKA BARU SESUAI INSTRUKSI: FILTER TAHUN DARI KOLOM "YEARS" ATAU "N" ---
+            let idxYear = headers.findIndex(h => h.includes('years') || h.includes('tahun'));
+            if (idxYear === -1) idxYear = 13; // Default Kolom N (Index 13)
+
+            const rowsUtil = rowsAll.slice(1);
+            const siteMap = new Map();
+            const monthMap = new Map(); 
+            const weekMap = new Map();
+            const categoryMap = new Map();
+            const monthsOrder = ["Mei-Agustus", "Januari", "Februari", "Maret", "April", "Mei", "Juni", "Juli", "Agustus", "September", "Oktober", "November", "Desember"];
+            
+            AppState.nonSohData = []; // Reset Non SOH
+
+            rowsUtil.forEach(row => {
+                if(!row[idxSite] || !row[idxValue]) return;
+                
+                // --- PERBAIKAN LOGIKA TAHUN (DEFAULT TO 2025) ---
+                const dateRaw = row[idxDate]; 
+                const dateObj = parseDateFlexible(dateRaw);
+                let rowYear = row[idxYear] ? row[idxYear].toString().trim() : '';
+                
+                if (rowYear) {
+                } else if (dateObj) {
+                    rowYear = dateObj.getFullYear().toString();
+                } else {
+                    rowYear = '2025';
+                }
+                
+                if (year) {
+                    if (rowYear.toString() !== year.toString()) return; 
+                }
+
+                let siteName = row[idxSite].trim();
+                if (siteName.startsWith('Rp') || !isNaN(parseFloat(siteName.replace(/[.,]/g,'')))) {
+                        if (row[idxSite-1] && isNaN(parseFloat(row[idxSite-1]))) siteName = row[idxSite-1];
+                }
+
+                const upperSite = siteName.toUpperCase();
+                if (upperSite.includes("PL08") || upperSite.includes("DC PALARAN")) { siteName = "CMX PLRN"; } 
+                else if (upperSite.includes("PL26") || upperSite.includes("MHU")) { siteName = "MHU"; } 
+                else if (upperSite.includes("PL17") || upperSite.includes("MBLM")) { siteName = "MBL M"; } 
+                else if (upperSite.includes("PL04") || upperSite.includes("AGM")) { siteName = "AGM"; } 
+                else { const match = siteName.match(/PL\d+\s*\(([^)]+)\)/i); if (match && match[1]) { siteName = match[1].trim(); } }
+
+                const siteKey = normalizeString(siteName); 
+                
+                let cleanVal = row[idxValue].replace(/[Rp\s.]/g, '').replace(',', '.');
+                const rowValue = parseFloat(cleanVal) || 0;
+                
+                // --- PERBAIKAN PENGELOMPOKAN KATEGORI (AGREGASI) ---
+                // Agar tidak menampilkan list material panjang, kita kelompokkan paksa.
+                let rawCat = row[idxCategory] ? row[idxCategory].trim() : "";
+                let categoryName = "STO"; // Default kategori (biasanya mayoritas data adalah STO)
+                const lowerCat = rawCat.toLowerCase();
+
+                if (lowerCat.includes("non soh")) { 
+                    categoryName = "Part Non SOH"; 
+                } 
+                else if (lowerCat.includes("tf") || lowerCat.includes("transfer") || lowerCat.includes("posting")) { 
+                    categoryName = "TF Posting"; 
+                }
+                // Selain Non SOH dan TF, semuanya masuk ke "STO"
+
+                if (!categoryMap.has(categoryName)) categoryMap.set(categoryName, 0);
+                categoryMap.set(categoryName, categoryMap.get(categoryName) + rowValue);
+
+                if (categoryName === "Part Non SOH") {
+                    AppState.nonSohData.push({ "Date": row[1] || "-", "Description": row[3] || "-", "Site": siteName, "Category": categoryName, "Amount": rowValue, "Week": row[idxWeek] || "-" });
+                }
+
+                if (siteMap.has(siteKey)) { siteMap.get(siteKey).totalValue += rowValue; } 
+                else { siteMap.set(siteKey, { name: siteName, totalValue: rowValue }); }
+
+                let monthName = getMonthName(dateRaw);
+                if (!monthName || monthName === "Unknown") monthName = "Mei-Agustus";
+
+                if (!monthMap.has(monthName)) { monthMap.set(monthName, { total: 0, sites: new Map() }); }
+                const monthData = monthMap.get(monthName);
+                monthData.total += rowValue;
+                if (monthData.sites.has(siteKey)) monthData.sites.get(siteKey).value += rowValue;
+                else monthData.sites.set(siteKey, { name: siteName, value: rowValue });
+
+                let weekNum = 0;
+                let weekRaw = (row[idxWeek] || "").toString().trim();
+                const weekMatch = weekRaw.match(/(\d+)/);
+                if (weekMatch) { weekNum = parseInt(weekMatch[0]); } else if (dateObj) { weekNum = calculateWeekFromDate(dateObj); }
+                if (weekNum === 0 && monthName !== "Mei-Agustus") weekNum = 1;
+
+                let weekKey = "";
+                let weekLabel = "";
+                let sortOrder = 0;
+                if (monthName === "Mei-Agustus") {
+                        weekKey = `W${weekNum > 0 ? weekNum : '1-5'}-MeiAug`;
+                        weekLabel = `W${weekNum > 0 ? weekNum : '1-5'} Mei-Agustus`;
+                        sortOrder = 0 + (weekNum || 0);
+                } else {
+                        const shortMonth = monthName.substring(0, 3);
+                        weekKey = `W${weekNum}-${monthName}`;
+                        weekLabel = `W${weekNum} ${shortMonth}`;
+                        const mIdx = monthsOrder.indexOf(monthName);
+                        const baseIdx = mIdx !== -1 ? mIdx * 100 : 9900; 
+                        sortOrder = baseIdx + weekNum;
+                }
+
+                if (!weekMap.has(weekKey)) { weekMap.set(weekKey, { id: weekKey, label: weekLabel, total: 0, sites: new Map(), sortOrder: sortOrder }); }
+                const weekData = weekMap.get(weekKey);
+                weekData.total += rowValue;
+                if (weekData.sites.has(siteKey)) weekData.sites.get(siteKey).value += rowValue;
+                else weekData.sites.set(siteKey, { name: siteName, value: rowValue });
+            });
+
+            const newDashboardData = Array.from(siteMap.values()).map(item => {
+                return { id: normalizeString(item.name), name: item.name, value: item.totalValue, ytd: { value: item.totalValue } };
+            });
+            const totalYTD = newDashboardData.reduce((a,b) => a + b.value, 0);
+            newDashboardData.forEach(d => { d.percentage = totalYTD > 0 ? (d.value / totalYTD * 100) : 0; });
+            AppState.dashboardData = newDashboardData.sort((a,b) => b.value - a.value);
+
+            const newMonthlyData = Array.from(monthMap.entries()).map(([month, data]) => {
+                const sitesArray = Array.from(data.sites.values()).sort((a,b) => b.value - a.value);
+                const mIdx = monthsOrder.indexOf(month);
+                return { name: month, value: data.total, percentage: 0, sites: sitesArray, sortIdx: mIdx };
+            });
+            const totalMonthly = newMonthlyData.reduce((a,b) => a + b.value, 0);
+            newMonthlyData.forEach(d => { d.percentage = totalMonthly > 0 ? (d.value / totalMonthly * 100) : 0; });
+            AppState.monthlyBreakdown = newMonthlyData.sort((a,b) => a.sortIdx - b.sortIdx);
+
+            const newWeeklyData = Array.from(weekMap.values()).map(data => {
+                const sitesArray = Array.from(data.sites.values()).sort((a,b) => b.value - a.value);
+                return { id: data.id, name: data.label, value: data.total, percentage: 0, sites: sitesArray, sortOrder: data.sortOrder };
+            });
+            const totalWeekly = newWeeklyData.reduce((a,b) => a + b.value, 0);
+            newWeeklyData.forEach(d => { d.percentage = totalWeekly > 0 ? (d.value / totalWeekly * 100) : 0; });
+            AppState.weeklyBreakdown = newWeeklyData.sort((a,b) => a.sortOrder - b.sortOrder);
+            
+            const newYtdBreakdown = Array.from(categoryMap.entries()).map(([name, val]) => ({
+                name: name,
+                value: val,
+                percentage: (totalYTD > 0) ? (val / totalYTD * 100) : 0
+            })).sort((a,b) => b.value - a.value);
+            AppState.ytdBreakdown = newYtdBreakdown;
+        };
+
         const fetchDashboardDataAction = async () => {
             AppState.dashboardDataFetched = true;
             // Mock items hanya digunakan jika FETCH GAGAL (Error), bukan jika data kosong
@@ -315,7 +429,7 @@
 
             try {
                 const alarmSheetUrl = 'https://docs.google.com/spreadsheets/d/e/2PACX-1vTPtHu0LJ4f9BZ_7zx4PFIgKShRcuFbl449_tVUbh6c0VKdTZvIM9KrfT7rp_ByEQXEr65OA4hN18Wk/pub?output=csv';
-                const response = await fetch(alarmSheetUrl);
+                const response = await fetch(alarmSheetUrl, { method: 'GET', mode: 'cors', credentials: 'omit', cache: 'no-store' });
                 if (response.ok) {
                     const text = await response.text();
                     // Parse semua baris termasuk header untuk pencarian kolom cerdas
@@ -402,154 +516,19 @@
             const utilSheetUrl = 'https://docs.google.com/spreadsheets/d/e/2PACX-1vSgvF0NUSq_o9gV90IzgKGAeNiNu3I5KH0D8vde-hHHngl8Pw2HYvPGSdurUe_O0c9LM6aoApnG31TH/pub?gid=1387121170&single=true&output=csv';
             
             try {
-                const resUtil = await fetch(utilSheetUrl);
+                const resUtil = await fetch(utilSheetUrl, { method: 'GET', mode: 'cors', credentials: 'omit', cache: 'no-store' });
                 if(resUtil.ok) {
                     const textUtil = await resUtil.text();
                     const rowsAll = parseCSV(textUtil); 
                     
-                    if (!rowsAll || rowsAll.length < 2) return;
-                    const headers = rowsAll[0].map(h => h.toString().toLowerCase().trim());
-                    let idxWeek = headers.findIndex(h => h.includes('week') || h.includes('minggu'));
-                    if (idxWeek === -1) idxWeek = 12; 
-                    let idxDate = 1; 
-
-                    // --- PERBAIKAN: SMART COLUMN DISCOVERY (SITE & VALUE) ---
-                    // Mencari kolom 'Site'/'Plant'/'Project' agar tidak salah baca Rp420.000 sebagai Nama
-                    let idxSite = headers.findIndex(h => h === 'site' || h.includes('plant') || h === 'project' || h.includes('nama project') || h.includes('site name'));
-                    if (idxSite === -1) idxSite = 8; // Fallback jika header tidak ditemukan
-
-                    // Mencari kolom 'DPP'/'Amount'/'Total' untuk Nilai Uang
-                    let idxValue = headers.findIndex(h => h.includes('dpp') || h.includes('amount') || h.includes('total price') || h.includes('net value'));
-                    if (idxValue === -1) idxValue = 10; // Fallback
-
-                    // Mencari kolom Kategori
-                    let idxCategory = headers.findIndex(h => h.includes('category') || h.includes('kategori') || h.includes('description'));
-                    if (idxCategory === -1) idxCategory = 11;
-
-                    console.log(`Mapping Detected -> Site: ${idxSite}, Value: ${idxValue}, Category: ${idxCategory}`);
-
-                    const rowsUtil = rowsAll.slice(1);
-                    const siteMap = new Map();
-                    const monthMap = new Map(); 
-                    const weekMap = new Map();
-                    const categoryMap = new Map();
-                    const monthsOrder = ["Mei-Agustus", "Januari", "Februari", "Maret", "April", "Mei", "Juni", "Juli", "Agustus", "September", "Oktober", "November", "Desember"];
-                    
-                    AppState.nonSohData = [];
-                    rowsUtil.forEach(row => {
-                          // Gunakan index dinamis (idxSite & idxValue) bukan angka mati (8 & 10)
-                          if(!row[idxSite] || !row[idxValue]) return;
+                    if (rowsAll && rowsAll.length > 1) {
+                        // STORE RAW DATA
+                        AppState.rawUtilData = rowsAll;
                         
-                        let siteName = row[idxSite].trim();
-                        
-                        // Filter jika siteName malah berisi angka (safety check tambahan)
-                        if (siteName.startsWith('Rp') || !isNaN(parseFloat(siteName.replace(/[.,]/g,'')))) {
-                             // Jika terdeteksi angka, coba geser -1 atau +1 (darurat)
-                             if (row[idxSite-1] && isNaN(parseFloat(row[idxSite-1]))) siteName = row[idxSite-1];
-                        }
-
-                        const upperSite = siteName.toUpperCase();
-                        if (upperSite.includes("PL08") || upperSite.includes("DC PALARAN")) { siteName = "CMX PLRN"; } 
-                        else if (upperSite.includes("PL26") || upperSite.includes("MHU")) { siteName = "MHU"; } 
-                        else if (upperSite.includes("PL17") || upperSite.includes("MBLM")) { siteName = "MBL M"; } 
-                        else if (upperSite.includes("PL04") || upperSite.includes("AGM")) { siteName = "AGM"; } 
-                        else { const match = siteName.match(/PL\d+\s*\(([^)]+)\)/i); if (match && match[1]) { siteName = match[1].trim(); } }
-
-                        const siteKey = normalizeString(siteName); 
-                        
-                        // Ambil nilai dari kolom Value yang ditemukan
-                        let cleanVal = row[idxValue].replace(/[Rp\s.]/g, '').replace(',', '.');
-                        const rowValue = parseFloat(cleanVal) || 0;
-                        const dateRaw = row[idxDate]; 
-                        
-                        // Ambil kategori
-                        let categoryName = row[idxCategory] ? row[idxCategory].trim() : "Uncategorized";
-                        const lowerCat = categoryName.toLowerCase();
-
-                        if (lowerCat.includes("non soh")) { categoryName = "Part Non SOH"; } 
-                        else if (lowerCat.includes("tf post") || lowerCat.includes("tf posting")) { categoryName = "TF Posting"; }
-
-                        if (!categoryMap.has(categoryName)) categoryMap.set(categoryName, 0);
-                        categoryMap.set(categoryName, categoryMap.get(categoryName) + rowValue);
-
-                        if (categoryName === "Part Non SOH") {
-                            // Description ambil dari kolom category atau fallback row[3]
-                            AppState.nonSohData.push({ "Date": row[1] || "-", "Description": row[3] || "-", "Site": siteName, "Category": categoryName, "Amount": rowValue, "Week": row[idxWeek] || "-" });
-                        }
-
-                        if (siteMap.has(siteKey)) { siteMap.get(siteKey).totalValue += rowValue; } 
-                        else { siteMap.set(siteKey, { name: siteName, totalValue: rowValue }); }
-
-                        let monthName = getMonthName(dateRaw);
-                        let dateObj = parseDateFlexible(dateRaw);
-                        if (!monthName || monthName === "Unknown") monthName = "Mei-Agustus";
-
-                        if (!monthMap.has(monthName)) { monthMap.set(monthName, { total: 0, sites: new Map() }); }
-                        const monthData = monthMap.get(monthName);
-                        monthData.total += rowValue;
-                        if (monthData.sites.has(siteKey)) monthData.sites.get(siteKey).value += rowValue;
-                        else monthData.sites.set(siteKey, { name: siteName, value: rowValue });
-
-                        let weekNum = 0;
-                        let weekRaw = (row[idxWeek] || "").toString().trim();
-                        const weekMatch = weekRaw.match(/(\d+)/);
-                        if (weekMatch) { weekNum = parseInt(weekMatch[0]); } else if (dateObj) { weekNum = calculateWeekFromDate(dateObj); }
-                        if (weekNum === 0 && monthName !== "Mei-Agustus") weekNum = 1;
-
-                        let weekKey = "";
-                        let weekLabel = "";
-                        let sortOrder = 0;
-                        if (monthName === "Mei-Agustus") {
-                             weekKey = `W${weekNum > 0 ? weekNum : '1-5'}-MeiAug`;
-                             weekLabel = `W${weekNum > 0 ? weekNum : '1-5'} Mei-Agustus`;
-                             sortOrder = 0 + (weekNum || 0);
-                        } else {
-                             const shortMonth = monthName.substring(0, 3);
-                             weekKey = `W${weekNum}-${monthName}`;
-                             weekLabel = `W${weekNum} ${shortMonth}`;
-                             const mIdx = monthsOrder.indexOf(monthName);
-                             const baseIdx = mIdx !== -1 ? mIdx * 100 : 9900; 
-                             sortOrder = baseIdx + weekNum;
-                        }
-
-                        if (!weekMap.has(weekKey)) { weekMap.set(weekKey, { id: weekKey, label: weekLabel, total: 0, sites: new Map(), sortOrder: sortOrder }); }
-                        const weekData = weekMap.get(weekKey);
-                        weekData.total += rowValue;
-                        if (weekData.sites.has(siteKey)) weekData.sites.get(siteKey).value += rowValue;
-                        else weekData.sites.set(siteKey, { name: siteName, value: rowValue });
-                    });
-
-                    const newDashboardData = Array.from(siteMap.values()).map(item => {
-                        return { id: normalizeString(item.name), name: item.name, value: item.totalValue, ytd: { value: item.totalValue } };
-                    });
-                    const totalYTD = newDashboardData.reduce((a,b) => a + b.value, 0);
-                    newDashboardData.forEach(d => { d.percentage = totalYTD > 0 ? (d.value / totalYTD * 100) : 0; });
-                    AppState.dashboardData = newDashboardData.sort((a,b) => b.value - a.value);
-
-                    const newMonthlyData = Array.from(monthMap.entries()).map(([month, data]) => {
-                        const sitesArray = Array.from(data.sites.values()).sort((a,b) => b.value - a.value);
-                        const mIdx = monthsOrder.indexOf(month);
-                        return { name: month, value: data.total, percentage: 0, sites: sitesArray, sortIdx: mIdx };
-                    });
-                    const totalMonthly = newMonthlyData.reduce((a,b) => a + b.value, 0);
-                    newMonthlyData.forEach(d => { d.percentage = totalMonthly > 0 ? (d.value / totalMonthly * 100) : 0; });
-                    AppState.monthlyBreakdown = newMonthlyData.sort((a,b) => a.sortIdx - b.sortIdx);
-
-                    const newWeeklyData = Array.from(weekMap.values()).map(data => {
-                        const sitesArray = Array.from(data.sites.values()).sort((a,b) => b.value - a.value);
-                        return { id: data.id, name: data.label, value: data.total, percentage: 0, sites: sitesArray, sortOrder: data.sortOrder };
-                    });
-                    const totalWeekly = newWeeklyData.reduce((a,b) => a + b.value, 0);
-                    newWeeklyData.forEach(d => { d.percentage = totalWeekly > 0 ? (d.value / totalWeekly * 100) : 0; });
-                    AppState.weeklyBreakdown = newWeeklyData.sort((a,b) => a.sortOrder - b.sortOrder);
-                    
-                    const newYtdBreakdown = Array.from(categoryMap.entries()).map(([name, val]) => ({
-                        name: name,
-                        value: val,
-                        percentage: (totalYTD > 0) ? (val / totalYTD * 100) : 0
-                    })).sort((a,b) => b.value - a.value);
-                    AppState.ytdBreakdown = newYtdBreakdown;
-                    dataUpdated = true;
+                        // Process default year (optional, or wait for selection)
+                        // processUtilizationData(2025); 
+                        dataUpdated = true;
+                    }
                 }
             } catch(e) { console.error("Utilization Fetch Error:", e); }
             finally {
@@ -679,12 +658,14 @@
             render();
 
             const urls = [
-                'https://docs.google.com/spreadsheets/d/e/2PACX-1vRlP_G3hGSqAuvpbJwiT7Mh61rVXq36x8f_gd0WxVyM6MZj5wqPcnKc1qKtCXTCaQ/pub?output=csv', // DC Palaran
-                'https://docs.google.com/spreadsheets/d/e/2PACX-1vSQJuXr9TZho_Qn0NyHRjMxdxaJsjpRTAVQubeP8GRDImI1rFjD3Sw354TFsfz4gA/pub?output=csv', // CPLRN
-                'https://docs.google.com/spreadsheets/d/e/2PACX-1vSoi-fHlfXAFsdfLmqWGKTOqEe0rA8XT92GeUxrIq-KJ1CQh-iHM0nkgzudpWB2pg/pub?output=csv'  // Depo SMD (Converted from pubhtml)
+                // PERBAIKAN: Mengembalikan Link DC Palaran ke Link Publik yang Valid (Sesuai Instruksi)
+                'https://docs.google.com/spreadsheets/d/e/2PACX-1vQh2iMoXwHOU4QNm7mVesRuMSlEl-IuH2y9-0TUJj_dhK0XN3kwOvmYtDtPcdzAcbZv-9bGKaGpbUvb/pub?output=csv', 
+                'https://docs.google.com/spreadsheets/d/e/2PACX-1vSRrWO8m-825fGKTue7VACoVH3EFT1O_fCH0ixEriozK7rUab9rbnQpSq8FI58wWX8kezzQdpqd72yF/pub?output=csv', 
+                'https://docs.google.com/spreadsheets/d/e/2PACX-1vSqbKF1D2MiRgW2wEPy5l4rLZEIllpk3aIMhdK8UW1IQXn8bPYJwF532VSNzuUF3F0C3MKO3u8_owmg/pub?output=csv'  
             ];
 
             try {
+                // FIXED: Menggunakan fetch standar untuk stabilitas
                 const [resDC, resCPLRN, resSMD] = await Promise.all(urls.map(url => fetch(url)));
                 
                 const processData = (rows) => {
@@ -693,52 +674,46 @@
                     
                     if (!rows || rows.length < 2) return { unrestricted: 0, inTransit: 0 };
 
-                    // LOGIKA PENCARIAN KOLOM CERDAS (SMART COLUMN DISCOVERY)
-                    // Kita cari dulu baris header
-                    let headerIndex = 0;
-                    let idxUnrestricted = 13; // Default N
-                    let idxTransit = 15;      // Default P (Estimasi awal)
+                    // --- LOGIKA SESUAI INSTRUKSI (Value In Transit) ---
+                    
+                    // 2. Penentuan Posisi Data (Default Awal)
+                    let idxUnrestricted = 0; // Kolom A
+                    let idxTransit = 1;      // Kolom B (Langkah Antisipasi)
 
-                    // 1. Cari Header Row (Baris yang punya kata "Unrestricted" atau "Transit")
-                    for(let r = 0; r < Math.min(rows.length, 10); r++) {
-                        const rowStr = rows[r].join(' ').toLowerCase();
-                        if (rowStr.includes('unrestricted') || rowStr.includes('transit')) {
-                            headerIndex = r;
-                            
-                            // 2. Di baris header ini, cari index spesifik
-                            rows[r].forEach((cell, idx) => {
-                                const c = cell.toLowerCase();
-                                if (c.includes('unrestricted')) idxUnrestricted = idx;
-                                if (c.includes('transit')) idxTransit = idx;
-                            });
-                            console.log(`Smart Discovery -> Row: ${r}, Unrestricted: ${idxUnrestricted}, Transit: ${idxTransit}`);
-                            break;
-                        }
+                    // 1. Pencarian Judul Kolom (Header)
+                    if (rows.length > 0) {
+                        const headerRow = rows[0];
+                        headerRow.forEach((cell, i) => {
+                            if (cell) {
+                                const c = cell.toString().toLowerCase().trim();
+                                if (c.includes('unrestricted')) idxUnrestricted = i;
+                                
+                                // Mencari kolom yang judulnya memiliki kata "Value In Transit"
+                                if (c.includes('value in transit')) {
+                                    idxTransit = i; // Mengunci kolom jika ditemukan
+                                }
+                            }
+                        });
                     }
 
-                    // SAFETY: Jika Discovery gagal (misal header beda nama), kita pakai logika shift
-                    // User bilang 15 itu O. Maka P kemungkinan besar 16 atau 17.
-                    // Jika Smart Discovery gagal menemukan "Transit", kita paksa cek 16 & 17
-                    if (idxTransit === 15) { // Masih default
-                         // Cek manual apakah kolom 16/17 punya angka?
-                         // Ini fallback darurat
-                         // idxTransit = 16; 
-                    }
-
-                    // Mulai loop dari baris setelah header
-                    for(let i = headerIndex + 1; i < rows.length; i++) {
+                    // 3. Penyaringan & Pembersihan Data
+                    for(let i = 1; i < rows.length; i++) {
                         const row = rows[i];
-                        
-                        // Validasi row
-                        if (row.length > 1) {
-                            const firstCol = row[0] ? row[0].toString().toLowerCase() : "";
-                            // Filter baris total
-                            if (firstCol.includes("total") || firstCol.includes("grand")) continue;
-
-                            // Ambil Data dengan Index yang ditemukan
-                            let rawN = row[idxUnrestricted] || "0";
-                            let rawP = row[idxTransit] || "0";
+                        if (row.length > 0) {
+                            let rawN = (row[idxUnrestricted] !== undefined) ? row[idxUnrestricted].toString() : "0";
+                            let rawP = (row[idxTransit] !== undefined) ? row[idxTransit].toString() : "0";
                             
+                            rawN = rawN.trim();
+                            rawP = rawP.trim();
+
+                            // Melewati baris kosong atau judul ulang
+                            if ((rawN === "" || rawN === "-") && (rawP === "" || rawP === "-")) continue;
+                            const rawN_lower = rawN.toLowerCase();
+                            const rawP_lower = rawP.toLowerCase();
+                            if (rawN_lower.includes('value') || rawP_lower.includes('value')) continue;
+                            if (rawN_lower.includes('total') || rawP_lower.includes('total')) continue;
+
+                            // 4. Perhitungan Total
                             unrestr += parseFlexibleNumber(rawN);
                             transit += parseFlexibleNumber(rawP);
                         }
@@ -836,11 +811,18 @@
             render();
         };
 
+        const selectUtilizationYearAction = (year) => {
+            AppState.utilizationYear = year;
+            processUtilizationData(year);
+            render();
+        };
+
         // --- NEW: DASHBOARD NAVIGATION ACTIONS ---
         const openDashboardFeatureAction = (feature) => {
             if (feature === 'utilization') {
                 AppState.dashboardMode = 'utilization';
-                if (AppState.dashboardData.length === 0) {
+                AppState.utilizationYear = null; // Reset year on entry to show selection
+                if (AppState.dashboardData.length === 0 && AppState.rawUtilData.length === 0) {
                     fetchDashboardDataAction();
                 } else {
                     render();
@@ -1499,7 +1481,47 @@
         }
         function renderObjective() { return `<section class="py-20 bg-white"><div class="max-w-7xl mx-auto px-4 grid grid-cols-1 lg:grid-cols-2 gap-16 items-center"><div><h2 class="text-orange-500 font-bold uppercase tracking-widest text-sm mb-2">Our Core Mission</h2><h3 class="text-4xl font-bold text-slate-900 mb-6">Optimizing Inventory Utilization & Stabilization</h3><p class="text-slate-600 text-lg leading-relaxed mb-6">The primary objective of DC Palaran is to function as the stabilizing force across the entire supply chain.</p><ul class="space-y-4">${['Centralized Buffer Stock Management', 'Reduction of Site-Level Deadstock', 'Rapid Deployment to Satellite Projects'].map(item => `<li class="flex items-center text-slate-700 font-medium"><div class="mr-3 bg-slate-100 p-1 rounded-full text-orange-500"><i data-lucide="shield-check" class="h-5 w-5"></i></div>${item}</li>`).join('')}</ul></div><div class="relative"><div class="absolute -inset-4 bg-orange-100 rounded-xl transform rotate-2"></div><img src="https://images.unsplash.com/photo-1553413077-190dd305871c?ixlib=rb-4.0.3&auto=format&fit=crop&w=1035&q=80" class="relative rounded-lg shadow-2xl w-full object-cover h-96"></div></div></section>`; }
         function renderKeyFunctions() { return `<section id="functions" class="py-20 bg-slate-50"><div class="max-w-7xl mx-auto px-4 text-center mb-16"><h2 class="text-3xl md:text-4xl font-bold text-slate-900 mb-4">Key Operational Functions</h2><div class="w-24 h-1 bg-orange-500 mx-auto rounded-full"></div></div><div class="max-w-7xl mx-auto px-4 grid grid-cols-1 md:grid-cols-3 gap-8">${[{icon:'truck',t:'Strategic Transit Hub',d:'Primary consolidation point.'},{icon:'database',t:'Buffer Stock Center',d:'Managing volatility.'},{icon:'bar-chart-3',t:'Inventory Stabilization',d:'Control tower for MIN-MAX.'}].map(f=>`<div class="bg-white rounded-xl shadow-lg p-8 border-t-4 border-transparent hover:border-orange-500 transition-all"><div class="mb-6 bg-slate-50 w-20 h-20 rounded-full flex items-center justify-center"><i data-lucide="${f.icon}" class="h-10 w-10 text-orange-500"></i></div><h3 class="text-xl font-bold text-slate-900 mb-3">${f.t}</h3><p class="text-slate-600">${f.d}</p></div>`).join('')}</div></section>`; }
-        function renderCategories() { return `<section id="categories" class="py-20 bg-slate-900 text-white"><div class="max-w-7xl mx-auto px-4 mb-12"><h2 class="text-3xl font-bold mb-2">Material Categories</h2></div><div class="max-w-7xl mx-auto px-4 grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">${[{n:'Spare Parts',i:'settings',img:'1486262715619-67b85e0b08d3'},{n:'Tyres & Rims',i:'layers',img:'1583258509156-f28822026858'},{n:'Components',i:'cpu',img:'1580894732930-0babd100d356'},{n:'General Supplies',i:'box',img:'1595074474855-f9397f8ef5fd'}].map(c=>`<div class="group relative h-96 rounded-lg overflow-hidden cursor-pointer"><img src="https://images.unsplash.com/photo-${c.img}?auto=format&fit=crop&w=600&q=80" class="absolute inset-0 w-full h-full object-cover transition-transform duration-500 group-hover:scale-110"><div class="absolute inset-0 bg-gradient-to-t from-slate-900 via-slate-900/60 to-transparent opacity-90"></div><div class="absolute bottom-0 left-0 p-6 w-full"><div class="bg-orange-50 w-12 h-12 rounded-lg flex items-center justify-center mb-4"><i data-lucide="${c.i}" class="text-white w-6 h-6"></i></div><h3 class="text-xl font-bold mb-2 border-l-4 border-orange-500 pl-3">${c.n}</h3></div></div>`).join('')}</div></section>`; }
+        
+        // PERBAIKAN: Menambahkan warna spesifik untuk setiap kategori ikon
+        function renderCategories() { 
+            return `<section id="categories" class="py-20 bg-slate-900 text-white">
+                <div class="max-w-7xl mx-auto px-4 mb-12"><h2 class="text-3xl font-bold mb-2">Material Categories</h2></div>
+                <div class="max-w-7xl mx-auto px-4 grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
+                    ${[
+                        // UPDATE: Menggunakan Link Google Drive BARU untuk Spare Parts
+                        // ID File: 1FTYxFI0PmE7S1dmtUTZUwUUiDlp9ewCm
+                        {
+                            n:'Spare Parts', 
+                            i:'settings', 
+                            img:'https://drive.google.com/uc?export=view&id=1FTYxFI0PmE7S1dmtUTZUwUUiDlp9ewCm', 
+                            clr:'bg-orange-500',
+                            isCustom: true // Penanda gambar custom
+                        },
+                        {n:'Tyres & Rims', i:'layers', img:'1583258509156-f28822026858', clr:'bg-blue-600', isCustom: false},
+                        {n:'Components', i:'cpu', img:'1580894732930-0babd100d356', clr:'bg-purple-600', isCustom: false},
+                        {n:'General Supplies', i:'box', img:'1595074474855-f9397f8ef5fd', clr:'bg-emerald-600', isCustom: false}
+                    ].map(c=> {
+                        // Logika URL Gambar: Custom vs Unsplash
+                        const imgSrc = c.isCustom ? c.img : `https://images.unsplash.com/photo-${c.img}?auto=format&fit=crop&w=600&q=80`;
+                        
+                        return `
+                        <div class="group relative h-96 rounded-lg overflow-hidden cursor-pointer">
+                            <img src="${imgSrc}" 
+                                 class="absolute inset-0 w-full h-full object-cover transition-transform duration-500 group-hover:scale-110"
+                                 onerror="this.onerror=null; this.src='https://images.unsplash.com/photo-1486262715619-67b85e0b08d3?auto=format&fit=crop&w=600&q=80';"> 
+                            <div class="absolute inset-0 bg-gradient-to-t from-slate-900 via-slate-900/60 to-transparent opacity-90"></div>
+                            <div class="absolute bottom-0 left-0 p-6 w-full">
+                                <div class="${c.clr} w-12 h-12 rounded-lg flex items-center justify-center mb-4 shadow-lg border border-white/10">
+                                    <i data-lucide="${c.i}" class="text-white w-6 h-6"></i>
+                                </div>
+                                <h3 class="text-xl font-bold mb-2 border-l-4 border-orange-500 pl-3">${c.n}</h3>
+                            </div>
+                        </div>`;
+                    }).join('')}
+                </div>
+            </section>`; 
+        }
+
         function renderProcess() { return `<section id="process" class="py-20 bg-white"><div class="max-w-7xl mx-auto px-4 text-center mb-16"><h2 class="text-3xl font-bold text-slate-900">Operational Process Flow</h2></div><div class="max-w-7xl mx-auto px-4 relative"><div class="hidden md:block absolute top-1/2 left-0 w-full h-1 bg-slate-200 -translate-y-1/2 z-0"></div><div class="grid grid-cols-1 md:grid-cols-3 gap-12 relative z-10">${['Incoming & QC', 'Inventory Mgmt', 'Outgoing & Dispatch'].map((t,i) => `<div class="bg-white p-6 rounded-xl border border-slate-100 shadow-lg text-center"><div class="w-16 h-16 ${i===1?'bg-orange-500':'bg-slate-900'} text-white rounded-full flex items-center justify-center text-2xl font-bold mx-auto mb-6 ring-8 ring-white">${i+1}</div><h3 class="text-xl font-bold text-slate-800 mb-3">${t}</h3><p class="text-slate-500 text-sm">Critical procedures ensuring operational excellence.</p></div>`).join('')}</div></div></section>`; }
         
         function renderTrackingSection() { 
@@ -1913,7 +1935,45 @@
         }
 
         function renderUtilizationDashboard() {
-            if (AppState.dashboardData.length === 0) AppState.dashboardData = generateReportData();
+            // NEW: Year Selection Mode
+            if (!AppState.utilizationYear) {
+                return `
+                <div class="min-h-screen pt-24 pb-12 bg-slate-950 text-white animate-in">
+                    <div class="max-w-7xl mx-auto px-4">
+                        <button onclick="window.resetDashboard()" class="mb-8 flex items-center text-slate-400 hover:text-orange-400 text-sm font-medium uppercase"><i data-lucide="arrow-left" class="w-4 h-4 mr-2"></i> Back to Categories</button>
+                        
+                        <div class="text-center mb-16">
+                            <h2 class="text-4xl font-bold mb-4">Pilih Tahun Anggaran</h2>
+                            <p class="text-slate-400">Pilih tahun untuk melihat data utilisasi inventori.</p>
+                        </div>
+
+                        <div class="grid grid-cols-1 md:grid-cols-2 gap-8 max-w-4xl mx-auto">
+                            <!-- Card 2025 -->
+                            <div onclick="window.selectUtilizationYear(2025)" class="bg-gradient-to-br from-slate-800 to-slate-900 border border-slate-700 hover:border-orange-500 p-10 rounded-2xl cursor-pointer group transition-all duration-300 transform hover:-translate-y-2 hover:shadow-2xl hover:shadow-orange-500/20 text-center">
+                                <h3 class="text-6xl font-extrabold text-white mb-4 group-hover:text-orange-500 transition-colors">2025</h3>
+                                <p class="text-slate-400 font-medium">Laporan Utilisasi Tahun 2025</p>
+                            </div>
+
+                            <!-- Card 2026 -->
+                            <div onclick="window.selectUtilizationYear(2026)" class="bg-gradient-to-br from-slate-800 to-slate-900 border border-slate-700 hover:border-orange-500 p-10 rounded-2xl cursor-pointer group transition-all duration-300 transform hover:-translate-y-2 hover:shadow-2xl hover:shadow-orange-500/20 text-center">
+                                <h3 class="text-6xl font-extrabold text-white mb-4 group-hover:text-orange-500 transition-colors">2026</h3>
+                                <p class="text-slate-400 font-medium">Laporan Utilisasi Tahun 2026</p>
+                            </div>
+                        </div>
+                    </div>
+                </div>`;
+            }
+
+            if (AppState.dashboardData.length === 0) {
+                 if (AppState.rawUtilData.length > 0) {
+                     // If raw data exists but processed data is empty, maybe strict filtering found nothing for this year
+                     // Just render empty state or process again (safety)
+                 } else {
+                     // Loading
+                     return '<div class="min-h-screen pt-24 flex justify-center items-center text-white"><i data-lucide="loader-2" class="animate-spin mr-2"></i> Loading Utilization Data...</div>';
+                 }
+            }
+
             const data = AppState.dashboardData;
             const view = AppState.reportView;
             const selectedMonth = AppState.selectedMonth;
@@ -1921,11 +1981,11 @@
             let currentData = [], currentTotal = 0, cardTitle = "", subText = "", colName = "", showBackButton = false, backAction = "";
 
             if (view === 'YTD') {
-                currentData = data; currentTotal = data.reduce((a, b) => a + b.ytd.value, 0); cardTitle = "Total Inventory Utilization (YTD)"; subText = "Accumulated Value Year-to-Date"; colName = "Site";
+                currentData = data; currentTotal = data.reduce((a, b) => a + b.ytd.value, 0); cardTitle = `Total Inventory Utilization (${AppState.utilizationYear})`; subText = "Accumulated Value Year-to-Date"; colName = "Site";
             } else if (view === 'Monthly') {
-                if (selectedMonth) { const monthData = AppState.monthlyBreakdown.find(m => m.name === selectedMonth); currentData = monthData ? monthData.sites : []; currentTotal = monthData ? monthData.value : 0; cardTitle = `Utilization Breakdown: ${selectedMonth}`; subText = "Detailed Site Contribution"; colName = "Site"; showBackButton = true; backAction = "window.clearMonth()"; } else { currentData = AppState.monthlyBreakdown; currentTotal = currentData.reduce((a, b) => a + b.value, 0); cardTitle = "Total Utilization (Monthly Breakdown)"; subText = "Actual Value Aggregated by Month"; colName = "Month"; }
+                if (selectedMonth) { const monthData = AppState.monthlyBreakdown.find(m => m.name === selectedMonth); currentData = monthData ? monthData.sites : []; currentTotal = monthData ? monthData.value : 0; cardTitle = `Utilization Breakdown: ${selectedMonth}`; subText = "Detailed Site Contribution"; colName = "Site"; showBackButton = true; backAction = "window.clearMonth()"; } else { currentData = AppState.monthlyBreakdown; currentTotal = currentData.reduce((a, b) => a + b.value, 0); cardTitle = `Total Utilization (${AppState.utilizationYear} Monthly)`; subText = "Actual Value Aggregated by Month"; colName = "Month"; }
             } else if (view === 'Weekly') {
-                if (selectedWeekId) { const weekData = AppState.weeklyBreakdown.find(w => w.id === selectedWeekId); currentData = weekData ? weekData.sites : []; currentTotal = weekData ? weekData.value : 0; cardTitle = weekData ? `Utilization: ${weekData.name}` : "Weekly Detail"; subText = "Site Breakdown for Selected Week"; colName = "Site"; showBackButton = true; backAction = "window.clearWeeklyDrill()"; } else { currentData = AppState.weeklyBreakdown; currentTotal = currentData.reduce((a, b) => a + b.value, 0); cardTitle = "Total Utilization (Weekly Breakdown)"; subText = "Aggregated Value by Week"; colName = "Week"; }
+                if (selectedWeekId) { const weekData = AppState.weeklyBreakdown.find(w => w.id === selectedWeekId); currentData = weekData ? weekData.sites : []; currentTotal = weekData ? weekData.value : 0; cardTitle = weekData ? `Utilization: ${weekData.name}` : "Weekly Detail"; subText = "Site Breakdown for Selected Week"; colName = "Site"; showBackButton = true; backAction = "window.clearWeeklyDrill()"; } else { currentData = AppState.weeklyBreakdown; currentTotal = currentData.reduce((a, b) => a + b.value, 0); cardTitle = `Total Utilization (${AppState.utilizationYear} Weekly)`; subText = "Aggregated Value by Week"; colName = "Week"; }
             }
 
             let topContentHTML = '';
@@ -1936,9 +1996,13 @@
                 topContentHTML = `<div class="mb-8 animate-in"><h2 class="text-2xl font-bold text-white mb-4 flex items-center"><i data-lucide="calendar" class="w-6 h-6 mr-2 text-orange-500"></i> ${gridTitle}</h2><div class="grid ${gridCols} gap-4">${currentData.map((item, index) => { const gradients = ["from-blue-600 to-indigo-700", "from-emerald-500 to-teal-700", "from-orange-500 to-red-600", "from-purple-500 to-pink-600", "from-cyan-500 to-blue-600", "from-slate-600 to-slate-800"]; const grad = gradients[index % gradients.length]; let clickAction = ""; if (view === 'Monthly') clickAction = `onclick="window.setMonth('${item.name}')"`; if (view === 'Weekly') clickAction = `onclick="window.setWeeklyDrill('${item.id}')"`; return `<div ${clickAction} class="relative bg-white rounded-xl shadow-lg overflow-hidden group hover:-translate-y-1 transition-all duration-300 border border-slate-200 cursor-pointer"><div class="absolute top-0 right-0 w-20 h-20 bg-gradient-to-br ${grad} opacity-10 rounded-bl-full group-hover:opacity-20 transition-opacity"></div><div class="p-5 relative z-10"><div class="flex justify-between items-start mb-3"><div class="p-2 rounded-lg bg-gradient-to-br ${grad} text-white shadow-md"><i data-lucide="bar-chart-2" class="w-4 h-4"></i></div><div class="text-right"><span class="text-[10px] font-bold px-2 py-0.5 rounded-full bg-slate-100 text-slate-500 border border-slate-200">${item.percentage.toFixed(1)}%</span></div></div><h3 class="text-xs font-bold text-slate-500 uppercase tracking-wider mb-1 truncate" title="${item.name}">${item.name}</h3><p class="text-lg font-extrabold text-slate-900 tracking-tight">${formatIDR(item.value)}</p><p class="text-[10px] text-blue-500 mt-2 font-semibold flex items-center">Details <i data-lucide="chevron-right" class="w-3 h-3 ml-1"></i></p></div><div class="h-1 w-full bg-gradient-to-r ${grad}"></div></div>`; }).join('')}</div></div>`;
             } else {
                 let ytdBreakdownHTML = '';
+                
+                // PERBAIKAN: Memunculkan Kembali Card Breakdown (STO, TF, Non SOH)
+                // Ini menampilkan rincian total value berdasarkan kategori Remarks (Kolom L)
                 if (view === 'YTD' && AppState.ytdBreakdown && AppState.ytdBreakdown.length > 0) {
                      ytdBreakdownHTML = `<div class="mt-4 grid grid-cols-1 sm:grid-cols-3 gap-3 animate-in fade-in slide-in-from-bottom-2">${AppState.ytdBreakdown.map((cat, idx) => { let colorClass = "bg-slate-500"; if (cat.name.includes("Non SOH")) colorClass = "bg-purple-500"; else if (cat.name.includes("STO")) colorClass = "bg-orange-500"; else if (cat.name.includes("TF")) colorClass = "bg-blue-500"; else colorClass = "bg-emerald-500"; return `<div class="bg-slate-800/50 rounded-lg p-3 border border-slate-700/50 flex flex-col justify-between hover:bg-slate-700/50 transition duration-300 relative group"><div class="flex justify-between items-start"><span class="text-[10px] uppercase font-bold text-slate-400 tracking-wider truncate pr-2" title="${cat.name}">${cat.name}</span><div class="${colorClass} w-2 h-2 rounded-full"></div></div><div class="mt-2"><span class="text-lg font-bold text-white tracking-tight block">${formatIDR(cat.value)}</span><span class="text-[10px] text-slate-500 font-medium">${cat.percentage.toFixed(1)}% of Total</span></div><div class="w-full bg-slate-700 h-1 mt-3 rounded-full overflow-hidden"><div class="${colorClass} h-full rounded-full" style="width: ${cat.percentage}%"></div></div>${cat.name.includes("Non SOH") ? `<button onclick="window.downloadNonSohExcel()" class="absolute top-2 right-2 p-1.5 bg-slate-700 hover:bg-slate-600 rounded-md text-white opacity-0 group-hover:opacity-100 transition-opacity" title="Download Excel"><i data-lucide="download" class="w-3 h-3"></i></button>` : ''}</div>`; }).join('')}</div>`;
                 }
+
                 topContentHTML = `<div class="mb-8 animate-in"><div class="bg-gradient-to-r from-slate-900 to-slate-800 border border-slate-700 rounded-2xl p-8 shadow-2xl relative overflow-hidden group"><div class="absolute top-0 right-0 w-64 h-64 bg-orange-500 opacity-10 rounded-full -mr-16 -mt-16 blur-3xl group-hover:opacity-20 transition-opacity duration-500"></div><div class="relative z-10"><div class="flex items-center justify-between"><div><p class="text-sm text-orange-400 font-bold uppercase tracking-wider mb-1 flex items-center"><i data-lucide="trending-up" class="w-4 h-4 mr-2"></i> ${cardTitle}</p><h2 class="text-4xl md:text-6xl font-extrabold text-white tracking-tight">${formatIDR(currentTotal)}</h2></div><div class="hidden md:block bg-slate-800 p-4 rounded-xl border border-slate-700 shadow-lg"><i data-lucide="wallet" class="w-12 h-12 text-orange-500"></i></div></div>${ytdBreakdownHTML}<div class="mt-4 flex items-center space-x-4 text-sm text-slate-400"><span class="bg-green-500/20 text-green-400 px-2 py-1 rounded flex items-center"><i data-lucide="arrow-up-right" class="w-3 h-3 mr-1"></i> Live Data</span><span>${subText}</span></div></div></div></div>`;
             }
             const palette = ['#f97316', '#3b82f6', '#10b981', '#a855f7', '#ec4899', '#64748b', '#eab308', '#ef4444'];
@@ -1949,7 +2013,8 @@
             return `
             <div class="min-h-screen pt-24 pb-12 bg-slate-950 text-white animate-in">
                 <div class="max-w-7xl mx-auto px-4">
-                    <button onclick="window.resetDashboard()" class="mb-6 flex items-center text-slate-400 hover:text-blue-400 text-sm font-medium uppercase transition-colors"><i data-lucide="arrow-left" class="w-4 h-4 mr-2"></i> Back to Categories</button>
+                    <!-- Changed Back Action to clear year -->
+                    <button onclick="window.openDashboardFeature('utilization')" class="mb-6 flex items-center text-slate-400 hover:text-blue-400 text-sm font-medium uppercase transition-colors"><i data-lucide="arrow-left" class="w-4 h-4 mr-2"></i> Back to Year Selection</button>
                     ${topContentHTML}
                     <div class="bg-slate-900/80 border border-slate-800 rounded-2xl p-2 mb-8 flex flex-col md:flex-row justify-between items-center gap-4">
                         <div class="flex space-x-2">
@@ -1989,8 +2054,7 @@
             </div>`;
         }
 
-        // --- 7. MAIN RENDER & INIT ---
-        
+        // --- FIXED: ADDING MISSING FUNCTION 'renderInventoryDashboard' ---
         function renderInventoryDashboard() {
             // Check loading state
             if (AppState.inventoryData.loading) {
@@ -2026,8 +2090,9 @@
                         <div class="relative z-10 flex flex-col md:flex-row justify-between items-center">
                             <div>
                                 <h3 class="text-blue-400 font-bold uppercase tracking-widest text-sm mb-2">Total Inventory Value (All Sites)</h3>
-                                <h1 class="text-4xl md:text-5xl font-extrabold text-white tracking-tight mb-2">${formatIDR(totalValue)}</h1>
-                                <p class="text-slate-400 text-sm">Combined Value Unrestricted & In-Transit</p>
+                                <!-- PERBAIKAN: Menambahkan ID 'totalGlobalValue' untuk update dinamis -->
+                                <h1 id="totalGlobalValue" class="text-4xl md:text-5xl font-extrabold text-white tracking-tight mb-2">${formatIDR(totalValue)}</h1>
+                                <p class="text-slate-400 text-sm">Combined Value Unrestricted & In-Transit (Real-time)</p>
                             </div>
                             <div class="hidden md:block bg-blue-900/50 p-4 rounded-xl border border-blue-700/50">
                                 <i data-lucide="layers" class="w-12 h-12 text-blue-400"></i>
@@ -2035,25 +2100,25 @@
                         </div>
                     </div>
 
-                    <div class="grid grid-cols-1 md:grid-cols-3 gap-6">
+                    <div class="grid grid-cols-1 md:grid-cols-3 gap-6 items-stretch">
                         <!-- DC Palaran Card -->
-                        <div class="bg-slate-900 border border-slate-800 rounded-2xl overflow-hidden hover:border-blue-600 transition-colors duration-300 shadow-xl group">
-                            <div class="bg-slate-800 p-6 border-b border-slate-700 flex justify-between items-center group-hover:bg-blue-900/20 transition-colors">
-                                <div class="flex items-center">
-                                    <div class="bg-blue-500 p-2 rounded-lg mr-4">
+                        <div class="bg-slate-900 border border-slate-800 rounded-2xl overflow-hidden hover:border-blue-600 transition-colors duration-300 shadow-xl group h-full flex flex-col">
+                            <div class="bg-slate-800 p-6 border-b border-slate-700 flex justify-between items-center gap-4 group-hover:bg-blue-900/20 transition-colors min-h-[100px]">
+                                <div class="flex items-center min-w-0">
+                                    <div class="bg-blue-500 p-2 rounded-lg mr-4 shrink-0">
                                         <i data-lucide="building-2" class="w-6 h-6 text-white"></i>
                                     </div>
-                                    <div>
-                                        <h3 class="text-xl font-bold text-white">DC Palaran</h3>
-                                        <p class="text-xs text-blue-400 uppercase font-bold tracking-wider">Main Hub</p>
+                                    <div class="min-w-0">
+                                        <h3 class="text-xl font-bold text-white truncate">DC Palaran</h3>
+                                        <p class="text-xs text-blue-400 uppercase font-bold tracking-wider truncate">Main Hub</p>
                                     </div>
                                 </div>
-                                <div class="text-right">
-                                    <span class="text-xs text-slate-400">Total Value</span>
-                                    <div class="font-bold text-white">${formatIDR(dc.unrestricted + dc.inTransit)}</div>
+                                <div class="text-right shrink-0">
+                                    <span class="text-xs text-slate-400 whitespace-nowrap">Total Value</span>
+                                    <div class="font-bold text-white whitespace-nowrap">${formatIDR(dc.unrestricted + dc.inTransit)}</div>
                                 </div>
                             </div>
-                            <div class="p-6 space-y-6">
+                            <div class="p-6 space-y-6 flex-1 flex flex-col justify-center">
                                 <!-- Unrestricted -->
                                 <div class="flex items-center justify-between p-4 bg-slate-800/50 rounded-xl border border-slate-700">
                                     <div class="flex items-center">
@@ -2066,39 +2131,27 @@
                                         </div>
                                     </div>
                                 </div>
-                                <!-- In Transit -->
-                                <div class="flex items-center justify-between p-4 bg-slate-800/50 rounded-xl border border-slate-700">
-                                    <div class="flex items-center">
-                                        <div class="bg-orange-500/10 p-2 rounded-full mr-3">
-                                            <i data-lucide="truck" class="w-5 h-5 text-orange-500"></i>
-                                        </div>
-                                        <div>
-                                            <p class="text-xs text-slate-400 uppercase font-bold">Value In Transit</p>
-                                            <p class="text-lg font-bold text-white">${formatIDR(dc.inTransit)}</p>
-                                        </div>
-                                    </div>
-                                </div>
                             </div>
                         </div>
 
                         <!-- CPLRN Card -->
-                        <div class="bg-slate-900 border border-slate-800 rounded-2xl overflow-hidden hover:border-orange-600 transition-colors duration-300 shadow-xl group">
-                            <div class="bg-slate-800 p-6 border-b border-slate-700 flex justify-between items-center group-hover:bg-orange-900/20 transition-colors">
-                                <div class="flex items-center">
-                                    <div class="bg-orange-500 p-2 rounded-lg mr-4">
+                        <div class="bg-slate-900 border border-slate-800 rounded-2xl overflow-hidden hover:border-orange-600 transition-colors duration-300 shadow-xl group h-full flex flex-col">
+                            <div class="bg-slate-800 p-6 border-b border-slate-700 flex justify-between items-center gap-4 group-hover:bg-orange-900/20 transition-colors min-h-[100px]">
+                                <div class="flex items-center min-w-0">
+                                    <div class="bg-orange-500 p-2 rounded-lg mr-4 shrink-0">
                                         <i data-lucide="warehouse" class="w-6 h-6 text-white"></i>
                                     </div>
-                                    <div>
-                                        <h3 class="text-xl font-bold text-white">CPLRN</h3>
-                                        <p class="text-xs text-orange-400 uppercase font-bold tracking-wider">Consolidation</p>
+                                    <div class="min-w-0">
+                                        <h3 class="text-xl font-bold text-white truncate">CPLRN</h3>
+                                        <p class="text-xs text-orange-400 uppercase font-bold tracking-wider truncate">Consolidation</p>
                                     </div>
                                 </div>
-                                <div class="text-right">
-                                    <span class="text-xs text-slate-400">Total Value</span>
-                                    <div class="font-bold text-white">${formatIDR(cplrn.unrestricted + cplrn.inTransit)}</div>
+                                <div class="text-right shrink-0">
+                                    <span class="text-xs text-slate-400 whitespace-nowrap">Total Value</span>
+                                    <div class="font-bold text-white whitespace-nowrap">${formatIDR(cplrn.unrestricted + cplrn.inTransit)}</div>
                                 </div>
                             </div>
-                            <div class="p-6 space-y-6">
+                            <div class="p-6 space-y-6 flex-1 flex flex-col justify-center">
                                 <!-- Unrestricted -->
                                 <div class="flex items-center justify-between p-4 bg-slate-800/50 rounded-xl border border-slate-700">
                                     <div class="flex items-center">
@@ -2111,39 +2164,27 @@
                                         </div>
                                     </div>
                                 </div>
-                                <!-- In Transit -->
-                                <div class="flex items-center justify-between p-4 bg-slate-800/50 rounded-xl border border-slate-700">
-                                    <div class="flex items-center">
-                                        <div class="bg-orange-500/10 p-2 rounded-full mr-3">
-                                            <i data-lucide="truck" class="w-5 h-5 text-orange-500"></i>
-                                        </div>
-                                        <div>
-                                            <p class="text-xs text-slate-400 uppercase font-bold">Value In Transit</p>
-                                            <p class="text-lg font-bold text-white">${formatIDR(cplrn.inTransit)}</p>
-                                        </div>
-                                    </div>
-                                </div>
                             </div>
                         </div>
 
-                        <!-- Depo SMD Card (New) -->
-                        <div class="bg-slate-900 border border-slate-800 rounded-2xl overflow-hidden hover:border-indigo-600 transition-colors duration-300 shadow-xl group">
-                            <div class="bg-slate-800 p-6 border-b border-slate-700 flex justify-between items-center group-hover:bg-indigo-900/20 transition-colors">
-                                <div class="flex items-center">
-                                    <div class="bg-indigo-500 p-2 rounded-lg mr-4">
+                        <!-- Depo SMD Card -->
+                        <div class="bg-slate-900 border border-slate-800 rounded-2xl overflow-hidden hover:border-indigo-600 transition-colors duration-300 shadow-xl group h-full flex flex-col">
+                            <div class="bg-slate-800 p-6 border-b border-slate-700 flex justify-between items-center gap-4 group-hover:bg-indigo-900/20 transition-colors min-h-[100px]">
+                                <div class="flex items-center min-w-0">
+                                    <div class="bg-indigo-500 p-2 rounded-lg mr-4 shrink-0">
                                         <i data-lucide="container" class="w-6 h-6 text-white"></i>
                                     </div>
-                                    <div>
-                                        <h3 class="text-xl font-bold text-white">Depo SMD</h3>
-                                        <p class="text-xs text-indigo-400 uppercase font-bold tracking-wider">Samarinda</p>
+                                    <div class="min-w-0">
+                                        <h3 class="text-xl font-bold text-white truncate">Depo SMD</h3>
+                                        <p class="text-xs text-indigo-400 uppercase font-bold tracking-wider truncate">Samarinda</p>
                                     </div>
                                 </div>
-                                <div class="text-right">
-                                    <span class="text-xs text-slate-400">Total Value</span>
-                                    <div class="font-bold text-white">${formatIDR(depoSMD.unrestricted + depoSMD.inTransit)}</div>
+                                <div class="text-right shrink-0">
+                                    <span class="text-xs text-slate-400 whitespace-nowrap">Total Value</span>
+                                    <div class="font-bold text-white whitespace-nowrap">${formatIDR(depoSMD.unrestricted + depoSMD.inTransit)}</div>
                                 </div>
                             </div>
-                            <div class="p-6 space-y-6">
+                            <div class="p-6 space-y-6 flex-1 flex flex-col justify-center">
                                 <!-- Unrestricted -->
                                 <div class="flex items-center justify-between p-4 bg-slate-800/50 rounded-xl border border-slate-700">
                                     <div class="flex items-center">
@@ -2156,18 +2197,72 @@
                                         </div>
                                     </div>
                                 </div>
-                                <!-- In Transit -->
-                                <div class="flex items-center justify-between p-4 bg-slate-800/50 rounded-xl border border-slate-700">
-                                    <div class="flex items-center">
-                                        <div class="bg-orange-500/10 p-2 rounded-full mr-3">
-                                            <i data-lucide="truck" class="w-5 h-5 text-orange-500"></i>
-                                        </div>
-                                        <div>
-                                            <p class="text-xs text-slate-400 uppercase font-bold">Value In Transit</p>
-                                            <p class="text-lg font-bold text-white">${formatIDR(depoSMD.inTransit)}</p>
-                                        </div>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <!-- Monitoring In-Transit Section -->
+                    <div class="mt-12 border-t border-slate-800 pt-8">
+                         <!-- Header -->
+                        <div class="mb-8 flex items-center justify-between">
+                            <div>
+                                <h1 class="text-2xl font-display font-bold text-white">Monitoring In-Transit</h1>
+                                <p class="text-sm text-[#9CA3AF]">Semester 1 2026 (Target Zero)</p>
+                            </div>
+                            <div class="flex items-center gap-3">
+                                <span id="apiStatus" class="text-xs font-mono text-[#06B6D4] animate-pulse">Menghubungkan...</span>
+                                <button onclick="window.initTransitMonitoring()" class="p-2 bg-white/10 rounded-full hover:bg-white/20 transition"><i class="ph ph-arrow-clockwise text-white"></i></button>
+                            </div>
+                        </div>
+
+                        <!-- KPI Section -->
+                        <div class="grid grid-cols-1 md:grid-cols-2 gap-6 mb-8">
+                            <!-- KPI 1: Nilai Awal vs Sekarang -->
+                            <div class="glass-card p-6 flex flex-col justify-between">
+                                <div class="flex justify-between items-start">
+                                    <div>
+                                        <p class="text-[#9CA3AF] text-sm">Posisi SoH Saat Ini</p>
+                                        <h2 id="currentSoH" class="text-3xl font-bold text-white mt-1">Rp -</h2>
+                                    </div>
+                                    <div class="p-2 bg-[#06B6D4]/20 text-[#06B6D4] rounded-lg">
+                                        <i class="ph ph-money text-2xl"></i>
                                     </div>
                                 </div>
+                                <div class="mt-4 pt-4 border-t border-white/10 flex justify-between text-xs">
+                                    <span class="text-[#9CA3AF]">Start (27 Des 2025):</span>
+                                    <span class="font-mono text-white">Rp 14.538.009.628</span>
+                                </div>
+                            </div>
+
+                            <!-- KPI 2: Penyelesaian (Cleared) -->
+                            <div class="glass-card p-6 flex flex-col justify-between border-l-4 border-[#10B981]">
+                                <div class="flex justify-between items-start">
+                                    <div>
+                                        <p class="text-[#9CA3AF] text-sm">Penyelesaian (Cleared)</p>
+                                        <h2 id="clearedValue" class="text-3xl font-bold text-[#10B981] mt-1">Rp -</h2>
+                                    </div>
+                                    <div class="p-2 bg-[#10B981]/20 text-[#10B981] rounded-lg">
+                                        <i class="ph ph-check-circle text-2xl"></i>
+                                    </div>
+                                </div>
+                                <div class="mt-4 pt-4 border-t border-white/10 flex items-center gap-2">
+                                    <span id="clearedPercent" class="text-lg font-bold text-white">0%</span>
+                                    <span class="text-xs text-[#9CA3AF]">dari total target selesai</span>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Main Chart Section -->
+                        <div class="glass-card p-6">
+                            <div class="flex justify-between items-center mb-6">
+                                <h3 class="text-lg font-semibold text-white">Tren Penurunan (Real-time vs Target)</h3>
+                                <div class="flex gap-4 text-xs">
+                                    <div class="flex items-center gap-2"><span class="w-3 h-0.5 bg-gray-500 border border-gray-500 border-dashed"></span> <span class="text-[#9CA3AF]">Target Ideal</span></div>
+                                    <div class="flex items-center gap-2"><span class="w-3 h-3 rounded-full bg-[#06B6D4]"></span> <span class="text-white">Aktual</span></div>
+                                </div>
+                            </div>
+                            <div class="chart-container">
+                                <canvas id="transitChart"></canvas>
                             </div>
                         </div>
                     </div>
@@ -2178,6 +2273,223 @@
                 </div>
             </div>`;
         }
+        
+        // --- NEW: TRANSIT MONITORING LOGIC ---
+        window.initTransitMonitoring = async function() {
+            // --- KONFIGURASI ---
+            const startVal = 14538009628;
+            const targetEndVal = 0; 
+            const startDateStr = "2025-12-27";
+            const endDateStr = "2026-06-30";
+            
+            // Masukkan URL Web App Apps Script Anda di sini
+            const scriptUrl = "https://script.google.com/macros/s/AKfycbzZBPstaYWUd344I71wu2YwEe5eWNz8SAim0VBRy5QpwHgyzGpWGXJxzpj-hOkQuQNP/exec";
+
+            // --- 1. SETUP DATA SEMESTER ---
+            function generateBaseline() {
+                const labels = [];
+                const targetData = [];
+                const dateMap = {}; 
+                
+                const start = new Date(startDateStr);
+                const end = new Date(endDateStr);
+                const totalDays = Math.ceil((end - start) / (1000 * 60 * 60 * 24));
+                const dailyDrop = (startVal - targetEndVal) / totalDays;
+
+                let current = new Date(start);
+                let val = startVal;
+                let idx = 0;
+
+                while (current <= end) {
+                    const label = current.toLocaleDateString('id-ID', { day: 'numeric', month: 'short' });
+                    const isoKey = current.toISOString().split('T')[0]; // YYYY-MM-DD
+                    
+                    labels.push(label);
+                    targetData.push(val);
+                    dateMap[isoKey] = idx; 
+
+                    val -= dailyDrop;
+                    current.setDate(current.getDate() + 1);
+                    idx++;
+                }
+                return { labels, targetData, dateMap };
+            }
+
+            const baseline = generateBaseline();
+
+            // --- 2. CHART SETUP ---
+            const ctxEl = document.getElementById('transitChart');
+            if(!ctxEl) return; // Guard clause if element doesn't exist
+            
+            const ctx = ctxEl.getContext('2d');
+            
+            // Destroy existing chart if present to prevent canvas reuse error
+            if(window.myTransitChart) {
+                window.myTransitChart.destroy();
+            }
+
+            window.myTransitChart = new Chart(ctx, {
+                type: 'line',
+                data: {
+                    labels: baseline.labels,
+                    datasets: [
+                        {
+                            label: 'Target Line',
+                            data: baseline.targetData,
+                            borderColor: 'rgba(255, 255, 255, 0.2)',
+                            borderWidth: 2,
+                            borderDash: [5, 5],
+                            pointRadius: 0,
+                            fill: false,
+                            order: 2
+                        },
+                        {
+                            label: 'Aktual SoH',
+                            data: [], // Diisi nanti
+                            borderColor: '#06B6D4', // Cyan
+                            backgroundColor: (context) => {
+                                const ctx = context.chart.ctx;
+                                const gradient = ctx.createLinearGradient(0, 0, 0, 400);
+                                gradient.addColorStop(0, 'rgba(6, 182, 212, 0.5)');
+                                gradient.addColorStop(1, 'rgba(6, 182, 212, 0)');
+                                return gradient;
+                            },
+                            borderWidth: 3,
+                            pointRadius: 4,
+                            pointBackgroundColor: '#0B0F19',
+                            pointBorderColor: '#06B6D4',
+                            pointBorderWidth: 2,
+                            fill: true,
+                            tension: 0.3,
+                            order: 1
+                        }
+                    ]
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    plugins: { legend: { display: false }, tooltip: { mode: 'index', intersect: false, callbacks: { label: (c) => c.dataset.label + ': ' + new Intl.NumberFormat('id-ID', { style: 'currency', currency: 'IDR', maximumFractionDigits: 0, notation: "compact" }).format(c.raw) } } },
+                    scales: { 
+                        y: { 
+                            min: 0, 
+                            grid: { color: 'rgba(255,255,255,0.05)' },
+                            ticks: { color: '#9CA3AF', callback: (v) => (v/1000000000).toFixed(1) + 'M' } 
+                        },
+                        x: { 
+                            grid: { display: false },
+                            ticks: { color: '#9CA3AF', maxTicksLimit: 12 } 
+                        }
+                    }
+                }
+            });
+
+            // --- 3. FETCH DATA ---
+            const statusEl = document.getElementById('apiStatus');
+            if(statusEl) statusEl.innerText = "Memuat...";
+            
+            try {
+                // Anti-cache param
+                const response = await fetch(scriptUrl + "?v=" + new Date().getTime());
+                const json = await response.json();
+
+                if (json.status === 'success' && json.data) {
+                    const rows = json.data;
+                    const actualData = new Array(baseline.labels.length).fill(null);
+                    let lastValue = startVal; // Default ke start jika data kosong
+
+                    if (rows.length > 0) {
+                        rows.forEach((row, i) => {
+                            if (i === 0) return; // Skip Header
+
+                            // Baca Tanggal & Nilai
+                            let rawDate = row[0];
+                            let rawVal = row[1];
+                            let val = 0;
+
+                            // Parsing Nilai
+                            if (typeof rawVal === 'number') val = rawVal;
+                            else if (typeof rawVal === 'string') {
+                                let s = rawVal.replace(/[^0-9,.-]/g, '');
+                                if(s.includes('.') && s.includes(',')) s = s.replace(/\./g, '').replace(',', '.');
+                                else if(s.includes(',')) s = s.replace(',', '.');
+                                val = parseFloat(s);
+                            }
+
+                            // Parsing Tanggal ke ISO YYYY-MM-DD
+                            if (rawDate) {
+                                let d = new Date(rawDate);
+                                if (!isNaN(d.getTime())) {
+                                    let key = d.toISOString().split('T')[0];
+                                    
+                                    // Mapping ke Grafik
+                                    if (baseline.dateMap.hasOwnProperty(key) && !isNaN(val)) {
+                                        const idx = baseline.dateMap[key];
+                                        actualData[idx] = val;
+                                        lastValue = val; // Update nilai terakhir
+                                    }
+                                }
+                            }
+                        });
+                    }
+
+                    // Update Chart
+                    if (window.myTransitChart) {
+                        window.myTransitChart.data.datasets[1].data = actualData;
+                        window.myTransitChart.update();
+                    }
+
+                    // Update KPI
+                    const cleared = startVal - lastValue;
+                    const pct = (cleared / startVal) * 100;
+
+                    const fmt = new Intl.NumberFormat('id-ID', { style: 'currency', currency: 'IDR', maximumFractionDigits: 0, notation: "compact" });
+
+                    // SAFETY CHECKS: Pastikan elemen ada sebelum diisi
+                    const elCurrent = document.getElementById('currentSoH');
+                    if(elCurrent) elCurrent.innerText = fmt.format(lastValue);
+                    
+                    const elCleared = document.getElementById('clearedValue');
+                    if(elCleared) elCleared.innerText = fmt.format(cleared);
+                    
+                    const elPercent = document.getElementById('clearedPercent');
+                    if(elPercent) elPercent.innerText = pct.toFixed(1) + '%';
+
+                    // --- PERBAIKAN UTAMA: UPDATE TOTAL INVENTORY VALUE MENGGUNAKAN POSISI SOH SAAT INI ---
+                    // Logika: Total Global = (Total Unrestricted dari 3 Site) + (Posisi SoH Saat Ini sebagai In-Transit)
+                    
+                    const totalUnrestricted = AppState.inventoryData.dc.unrestricted + 
+                                              AppState.inventoryData.cplrn.unrestricted + 
+                                              AppState.inventoryData.depoSMD.unrestricted;
+                    
+                    // Hitung Total Baru
+                    const newTotalGlobal = totalUnrestricted + lastValue;
+                    
+                    // Update State & Tampilan
+                    AppState.inventoryData.totalValue = newTotalGlobal;
+                    
+                    const elTotalGlobal = document.getElementById('totalGlobalValue');
+                    // Gunakan formatIDR helper yang sudah ada untuk konsistensi tampilan (tanpa compact notation di header)
+                    const fmtFull = new Intl.NumberFormat('id-ID', { style: 'currency', currency: 'IDR', maximumFractionDigits: 0 });
+                    if (elTotalGlobal) elTotalGlobal.innerText = fmtFull.format(newTotalGlobal);
+
+                    if(statusEl) {
+                        statusEl.innerText = "Terhubung";
+                        statusEl.className = "text-xs font-mono text-[#10B981]";
+                    }
+                } else {
+                    if(statusEl) {
+                        statusEl.innerText = "Gagal API";
+                        statusEl.className = "text-xs font-mono text-[#EF4444]";
+                    }
+                }
+            } catch (e) {
+                console.error(e);
+                if(statusEl) {
+                    statusEl.innerText = "Error Koneksi";
+                    statusEl.className = "text-xs font-mono text-[#EF4444]";
+                }
+            }
+        };
 
         function renderDashboard() {
             // Dashboard Routing Logic
@@ -2210,6 +2522,11 @@
             } else if (AppState.currentView === 'dashboard') {
                 // FIX: Menggunakan insertAdjacentHTML langsung agar konsisten
                 root.insertAdjacentHTML('beforeend', renderDashboard());
+                
+                // NEW: Initialize Transit Chart if in Inventory Mode
+                if (AppState.dashboardMode === 'inventory') {
+                    window.initTransitMonitoring();
+                }
             } else if (AppState.currentView === 'catalog') {
                 root.insertAdjacentHTML('beforeend', renderCatalog());
             } else if (AppState.currentView === 'analysis') {
@@ -2328,6 +2645,9 @@
         window.openDashboardFeature = openDashboardFeatureAction;
         window.resetDashboard = resetDashboardAction;
         
+        // NEW: Export Selection Year Action
+        window.selectUtilizationYear = selectUtilizationYearAction;
+
         // --- ADDED DOWNLOAD ACTION ---
         window.downloadPendingGRExcel = downloadPendingGRExcelAction;
         window.downloadReminderGRExcel = downloadReminderGRExcelAction; 
