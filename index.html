@@ -1488,27 +1488,32 @@
                 <div class="max-w-7xl mx-auto px-4 mb-12"><h2 class="text-3xl font-bold mb-2">Material Categories</h2></div>
                 <div class="max-w-7xl mx-auto px-4 grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
                     ${[
-                        // UPDATE: Menggunakan Link Google Drive BARU untuk Spare Parts
+                        // UPDATE: Menggunakan Link Thumbnail Google Drive yang lebih stabil
                         // ID File: 1FTYxFI0PmE7S1dmtUTZUwUUiDlp9ewCm
                         {
                             n:'Spare Parts', 
                             i:'settings', 
-                            img:'https://drive.google.com/uc?export=view&id=1FTYxFI0PmE7S1dmtUTZUwUUiDlp9ewCm', 
+                            img:'https://drive.google.com/thumbnail?id=1FTYxFI0PmE7S1dmtUTZUwUUiDlp9ewCm&sz=w800', 
                             clr:'bg-orange-500',
-                            isCustom: true // Penanda gambar custom
+                            isCustom: true 
                         },
                         {n:'Tyres & Rims', i:'layers', img:'1583258509156-f28822026858', clr:'bg-blue-600', isCustom: false},
                         {n:'Components', i:'cpu', img:'1580894732930-0babd100d356', clr:'bg-purple-600', isCustom: false},
                         {n:'General Supplies', i:'box', img:'1595074474855-f9397f8ef5fd', clr:'bg-emerald-600', isCustom: false}
                     ].map(c=> {
-                        // Logika URL Gambar: Custom vs Unsplash
+                        // Logika URL Gambar
                         const imgSrc = c.isCustom ? c.img : `https://images.unsplash.com/photo-${c.img}?auto=format&fit=crop&w=600&q=80`;
                         
+                        // Hapus fallback untuk gambar custom agar tidak kembali ke gambar lama jika gagal load
+                        const fallbackAttr = c.isCustom 
+                            ? '' 
+                            : `onerror="this.onerror=null; this.src='https://images.unsplash.com/photo-1486262715619-67b85e0b08d3?auto=format&fit=crop&w=600&q=80';"`;
+
                         return `
                         <div class="group relative h-96 rounded-lg overflow-hidden cursor-pointer">
                             <img src="${imgSrc}" 
                                  class="absolute inset-0 w-full h-full object-cover transition-transform duration-500 group-hover:scale-110"
-                                 onerror="this.onerror=null; this.src='https://images.unsplash.com/photo-1486262715619-67b85e0b08d3?auto=format&fit=crop&w=600&q=80';"> 
+                                 ${fallbackAttr}> 
                             <div class="absolute inset-0 bg-gradient-to-t from-slate-900 via-slate-900/60 to-transparent opacity-90"></div>
                             <div class="absolute bottom-0 left-0 p-6 w-full">
                                 <div class="${c.clr} w-12 h-12 rounded-lg flex items-center justify-center mb-4 shadow-lg border border-white/10">
