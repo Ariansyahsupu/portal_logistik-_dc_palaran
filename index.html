@@ -141,7 +141,8 @@
             },
             // Utilization Year
             utilizationYear: null,
-            rawUtilData: [],
+            rawUtilData2025: [], // Data Khusus 2025 (Link Lama)
+            rawUtilData2026: [], // Data Khusus 2026 (Link Baru)
             // Security State
             isPasswordModalOpen: false,
             pendingAction: null,
@@ -189,13 +190,19 @@
 
         const parseDateFlexible = (dateStr) => {
             if (!dateStr) return null;
-            const parts = dateStr.trim().split(/[\/\-]/);
+            // PERBAIKAN: Support pemisah titik (.) untuk format Indonesia (dd.mm.yyyy)
+            const parts = dateStr.trim().split(/[\/\-\.]/);
+            
             if (parts.length === 3) {
                 const p0 = parseInt(parts[0], 10);
                 const p1 = parseInt(parts[1], 10);
                 const p2 = parseInt(parts[2], 10);
-                if (p2 > 1000) return new Date(p2, p1 - 1, p0); // DD/MM/YYYY
-                else if (p0 > 1000) return new Date(p0, p1 - 1, p2); // YYYY/MM/DD
+                
+                // Pastikan hasil parse adalah angka valid
+                if (!isNaN(p0) && !isNaN(p1) && !isNaN(p2)) {
+                    if (p2 > 1000) return new Date(p2, p1 - 1, p0); // DD/MM/YYYY
+                    else if (p0 > 1000) return new Date(p0, p1 - 1, p2); // YYYY/MM/DD
+                }
             }
             const date = new Date(dateStr);
             return isNaN(date.getTime()) ? null : date;
@@ -257,7 +264,14 @@
 
         // --- 4. DATA LOGIC & ACTIONS ---
         const processUtilizationData = (year) => {
-            const rowsAll = AppState.rawUtilData;
+            // PERBAIKAN: Memilih Sumber Data Berdasarkan Tahun
+            let rowsAll = [];
+            if (year == 2025) {
+                rowsAll = AppState.rawUtilData2025;
+            } else if (year == 2026) {
+                rowsAll = AppState.rawUtilData2026;
+            }
+
             if (!rowsAll || rowsAll.length < 2) return;
 
             const headers = rowsAll[0].map(h => h.toString().toLowerCase().trim());
@@ -292,34 +306,29 @@
             rowsUtil.forEach(row => {
                 if(!row[idxSite] || !row[idxValue]) return;
                 
-                // --- PERBAIKAN LOGIKA TAHUN (DEFAULT TO 2025) ---
                 const dateRaw = row[idxDate]; 
                 const dateObj = parseDateFlexible(dateRaw);
                 let rowYear = row[idxYear] ? row[idxYear].toString().trim() : '';
                 
-                if (rowYear) {
-                } else if (dateObj) {
-                    rowYear = dateObj.getFullYear().toString();
-                } else {
-                    rowYear = '2025';
+                // --- PERBAIKAN LOGIKA TAHUN (FIXED) ---
+                if (rowYear.includes('.')) rowYear = rowYear.split('.')[0];
+
+                if (!rowYear || rowYear === '-' || rowYear === '0' || rowYear.toLowerCase() === 'nan') {
+                    if (dateObj && !isNaN(dateObj.getFullYear())) {
+                        rowYear = dateObj.getFullYear().toString();
+                    } else {
+                        // Jika sumber data adalah 2025, paksa tahun kosong jadi 2025
+                        // Jika sumber data adalah 2026, paksa tahun kosong jadi 2026 (opsional)
+                        rowYear = year.toString(); 
+                    }
                 }
                 
+                // Filter Tahun Ekstra (Safety)
                 if (year) {
                     if (rowYear.toString() !== year.toString()) return; 
                 }
 
                 let siteName = row[idxSite].trim();
-                if (siteName.startsWith('Rp') || !isNaN(parseFloat(siteName.replace(/[.,]/g,'')))) {
-                        if (row[idxSite-1] && isNaN(parseFloat(row[idxSite-1]))) siteName = row[idxSite-1];
-                }
-
-                const upperSite = siteName.toUpperCase();
-                if (upperSite.includes("PL08") || upperSite.includes("DC PALARAN")) { siteName = "CMX PLRN"; } 
-                else if (upperSite.includes("PL26") || upperSite.includes("MHU")) { siteName = "MHU"; } 
-                else if (upperSite.includes("PL17") || upperSite.includes("MBLM")) { siteName = "MBL M"; } 
-                else if (upperSite.includes("PL04") || upperSite.includes("AGM")) { siteName = "AGM"; } 
-                else { const match = siteName.match(/PL\d+\s*\(([^)]+)\)/i); if (match && match[1]) { siteName = match[1].trim(); } }
-
                 const siteKey = normalizeString(siteName); 
                 
                 let cleanVal = row[idxValue].replace(/[Rp\s.]/g, '').replace(',', '.');
@@ -421,238 +430,73 @@
 
         const fetchDashboardDataAction = async () => {
             AppState.dashboardDataFetched = true;
-            // Mock items hanya digunakan jika FETCH GAGAL (Error), bukan jika data kosong
-            const mockPendingItems = [{ sto: '4500123456', project: 'PL01 MSJ', days: 45, date: '2023-10-01' }];
-            const mockReminderItems = [{ sto: '4500987654', project: 'PL03 BE', days: 14, date: '2023-10-20' }];
-            const mockOnTrackItems = [{ sto: '4500112233', project: 'PL06 KALSEL', days: 3, date: '2023-11-01' }]; 
             let dataUpdated = false;
-
+            // Alarm Logic
             try {
                 const alarmSheetUrl = 'https://docs.google.com/spreadsheets/d/e/2PACX-1vTPtHu0LJ4f9BZ_7zx4PFIgKShRcuFbl449_tVUbh6c0VKdTZvIM9KrfT7rp_ByEQXEr65OA4hN18Wk/pub?output=csv';
-                const response = await fetch(alarmSheetUrl, { method: 'GET', mode: 'cors', credentials: 'omit', cache: 'no-store' });
+                const response = await fetch(alarmSheetUrl);
                 if (response.ok) {
                     const text = await response.text();
-                    // Parse semua baris termasuk header untuk pencarian kolom cerdas
                     const allRows = parseCSV(text);
-                    
-                    // --- LOGIKA BARU: DETEKSI KOLOM TANGGAL (AI / HEADER) ---
-                    let dateColumnIndex = 34; // Default ke Kolom AI (Index 34)
-                    let siteColumnIndex = 36; // Default ke Kolom AK (Index 36) - Site Tujuan
-                    
+                    let dateColumnIndex = 34; 
+                    let siteColumnIndex = 36; 
                     if (allRows.length > 0) {
                         const headerRow = allRows[0];
-                        // Cari header yang mengandung kata "Tanggal Terkirim"
-                        const foundDateIdx = headerRow.findIndex(cell => 
-                            cell && cell.toString().toLowerCase().includes('tanggal terkirim')
-                        );
-                        if (foundDateIdx !== -1) {
-                            dateColumnIndex = foundDateIdx;
-                            console.log(`Column Discovery: 'Tanggal Terkirim' found at index ${dateColumnIndex}`);
-                        }
-
-                        // Cari header yang mengandung kata "Site Tujuan"
-                        const foundSiteIdx = headerRow.findIndex(cell => 
-                            cell && cell.toString().toLowerCase().includes('site tujuan')
-                        );
-                        if (foundSiteIdx !== -1) {
-                            siteColumnIndex = foundSiteIdx;
-                            console.log(`Column Discovery: 'Site Tujuan' found at index ${siteColumnIndex}`);
-                        }
+                        const foundDateIdx = headerRow.findIndex(cell => cell && cell.toString().toLowerCase().includes('tanggal terkirim'));
+                        if (foundDateIdx !== -1) dateColumnIndex = foundDateIdx;
+                        const foundSiteIdx = headerRow.findIndex(cell => cell && cell.toString().toLowerCase().includes('site tujuan'));
+                        if (foundSiteIdx !== -1) siteColumnIndex = foundSiteIdx;
                     }
-
-                    const rows = allRows.slice(1); // Data mulai dari baris ke-2
-                    let pendingItems = [];
-                    let reminderItems = []; 
-                    let onTrackItems = []; 
+                    const rows = allRows.slice(1);
+                    let pendingItems = [], reminderItems = [], onTrackItems = [];
                     const today = new Date();
-                    
                     rows.forEach(row => {
                         if (!row || row.length < 7) return; 
                         const sto = row[6];
                         if(!sto) return;
-                        
-                        // Update: Mengambil Project/Site dari Index yang ditentukan (AK/36) atau Header "Site Tujuan"
                         const project = (row[siteColumnIndex] && row[siteColumnIndex] !== 'undefined') ? row[siteColumnIndex] : 'Unknown';
-                        
-                        // MENGGUNAKAN KOLOM YANG BARU DITENTUKAN (AI/HEADER)
                         const dateStr = row[dateColumnIndex]; 
-
                         if (dateStr) {
                             const sentDate = parseDateFlexible(dateStr);
                             if (sentDate) {
                                 const diff = Math.ceil(Math.abs(today - sentDate) / (1000 * 60 * 60 * 24));
-                                
-                                if (diff > 30) {
-                                    pendingItems.push({ sto, project, days: diff, date: dateStr });
-                                } else if (diff >= 7) {
-                                    reminderItems.push({ sto, project, days: diff, date: dateStr });
-                                } else {
-                                    onTrackItems.push({ sto, project, days: diff, date: dateStr });
-                                }
+                                if (diff > 30) pendingItems.push({ sto, project, days: diff, date: dateStr });
+                                else if (diff >= 7) reminderItems.push({ sto, project, days: diff, date: dateStr });
+                                else onTrackItems.push({ sto, project, days: diff, date: dateStr });
                             }
                         }
                     });
-
-                    // PERBAIKAN: Menggunakan data asli meskipun kosong (menghapus fallback mockPendingItems)
-                    AppState.fullPendingGR = pendingItems;
-                    AppState.pendingGR = pendingItems; 
-                    
-                    AppState.fullReminderGR = reminderItems;
-                    AppState.reminderGR = reminderItems;
-
-                    AppState.fullOnTrackGR = onTrackItems;
-                    AppState.onTrackGR = onTrackItems;
-
+                    AppState.fullPendingGR = pendingItems; AppState.pendingGR = pendingItems; 
+                    AppState.fullReminderGR = reminderItems; AppState.reminderGR = reminderItems;
+                    AppState.fullOnTrackGR = onTrackItems; AppState.onTrackGR = onTrackItems;
                     dataUpdated = true;
                 }
-            } catch(e) { 
-                console.warn("Alarm Fetch Failed:", e.message); 
-                // Mock data hanya muncul jika koneksi GAGAL total
-                AppState.pendingGR = mockPendingItems; 
-                AppState.reminderGR = mockReminderItems;
-                AppState.onTrackGR = mockOnTrackItems;
-            }
+            } catch(e) { console.warn("Alarm Fetch Failed:", e.message); }
 
-            const utilSheetUrl = 'https://docs.google.com/spreadsheets/d/e/2PACX-1vSgvF0NUSq_o9gV90IzgKGAeNiNu3I5KH0D8vde-hHHngl8Pw2HYvPGSdurUe_O0c9LM6aoApnG31TH/pub?gid=1387121170&single=true&output=csv';
+            // Utilization Logic - PERBAIKAN: FETCH DUA SUMBER DATA (2025 & 2026)
+            const utilUrl2025 = 'https://docs.google.com/spreadsheets/d/e/2PACX-1vSgvF0NUSq_o9gV90IzgKGAeNiNu3I5KH0D8vde-hHHngl8Pw2HYvPGSdurUe_O0c9LM6aoApnG31TH/pub?gid=1387121170&single=true&output=csv';
+            const utilUrl2026 = 'https://docs.google.com/spreadsheets/d/e/2PACX-1vSgvF0NUSq_o9gV90IzgKGAeNiNu3I5KH0D8vde-hHHngl8Pw2HYvPGSdurUe_O0c9LM6aoApnG31TH/pub?gid=867366339&single=true&output=csv';
             
             try {
-                const resUtil = await fetch(utilSheetUrl, { method: 'GET', mode: 'cors', credentials: 'omit', cache: 'no-store' });
-                if(resUtil.ok) {
-                    const textUtil = await resUtil.text();
-                    const rowsAll = parseCSV(textUtil); 
-                    
-                    if (rowsAll && rowsAll.length > 1) {
-                        // STORE RAW DATA
-                        AppState.rawUtilData = rowsAll;
-                        
-                        // Process default year (optional, or wait for selection)
-                        // processUtilizationData(2025); 
-                        dataUpdated = true;
-                    }
+                const [res25, res26] = await Promise.all([fetch(utilUrl2025), fetch(utilUrl2026)]);
+                
+                if(res25.ok) {
+                    const text25 = await res25.text();
+                    AppState.rawUtilData2025 = parseCSV(text25);
+                    dataUpdated = true;
+                }
+                
+                if(res26.ok) {
+                    const text26 = await res26.text();
+                    AppState.rawUtilData2026 = parseCSV(text26);
+                    dataUpdated = true;
                 }
             } catch(e) { console.error("Utilization Fetch Error:", e); }
             finally {
-                if (dataUpdated || AppState.currentView === 'dashboard') {
-                    render();
-                }
+                if (dataUpdated || AppState.currentView === 'dashboard') render();
             }
         };
 
-        // --- NEW: DOWNLOAD ACTIONS ---
-        const downloadPendingGRExcelAction = () => {
-            if (!AppState.fullPendingGR || AppState.fullPendingGR.length === 0) {
-                alert("Tidak ada data overdue untuk diunduh.");
-                return;
-            }
-            const dataToExport = AppState.fullPendingGR.map(item => ({
-                "Project Site": item.project, "STO Number": item.sto, "Tanggal Kirim": item.date, "Hari Sejak Kirim": item.days, "Status": "OVERDUE (> 30 Hari)"
-            }));
-            const worksheet = XLSX.utils.json_to_sheet(dataToExport);
-            const workbook = XLSX.utils.book_new();
-            XLSX.utils.book_append_sheet(workbook, worksheet, "Overdue GR");
-            XLSX.writeFile(workbook, `Overdue_GR_${new Date().toISOString().split('T')[0]}.xlsx`);
-        };
-
-        const downloadReminderGRExcelAction = () => {
-            if (!AppState.fullReminderGR || AppState.fullReminderGR.length === 0) {
-                alert("Tidak ada data reminder untuk diunduh.");
-                return;
-            }
-            const dataToExport = AppState.fullReminderGR.map(item => ({
-                "Project Site": item.project, "STO Number": item.sto, "Tanggal Kirim": item.date, "Hari Sejak Kirim": item.days, "Status": "WARNING (7-30 Hari)"
-            }));
-            const worksheet = XLSX.utils.json_to_sheet(dataToExport);
-            const workbook = XLSX.utils.book_new();
-            XLSX.utils.book_append_sheet(workbook, worksheet, "Reminder GR");
-            XLSX.writeFile(workbook, `Reminder_GR_${new Date().toISOString().split('T')[0]}.xlsx`);
-        };
-
-        const downloadOnTrackGRExcelAction = () => {
-            if (!AppState.fullOnTrackGR || AppState.fullOnTrackGR.length === 0) {
-                alert("Tidak ada data recent shipment untuk diunduh.");
-                return;
-            }
-            const dataToExport = AppState.fullOnTrackGR.map(item => ({
-                "Project Site": item.project, "STO Number": item.sto, "Tanggal Kirim": item.date, "Hari Sejak Kirim": item.days, "Status": "ON TRACK (< 7 Hari)"
-            }));
-            const worksheet = XLSX.utils.json_to_sheet(dataToExport);
-            const workbook = XLSX.utils.book_new();
-            XLSX.utils.book_append_sheet(workbook, worksheet, "On Track GR");
-            XLSX.writeFile(workbook, `OnTrack_GR_${new Date().toISOString().split('T')[0]}.xlsx`);
-        };
-
-        const handleDashboardAccess = () => {
-            AppState.pendingAction = 'dashboard';
-            AppState.isPasswordModalOpen = true;
-            AppState.passwordError = false;
-            render();
-            setTimeout(() => document.getElementById('globalPasswordInput')?.focus(), 100);
-        };
-
-        const handleProjectMenuAccess = () => {
-            if (AppState.projectMenuOpen) {
-                toggleProjectMenuAction();
-                return;
-            }
-            AppState.pendingAction = 'projectMenu';
-            AppState.isPasswordModalOpen = true;
-            AppState.passwordError = false;
-            render();
-            setTimeout(() => document.getElementById('globalPasswordInput')?.focus(), 100);
-        };
-
-        const closePasswordModal = () => {
-            AppState.isPasswordModalOpen = false;
-            AppState.pendingAction = null;
-            AppState.passwordError = false;
-            render();
-        };
-
-        const submitGlobalPassword = (e) => {
-            e.preventDefault();
-            const input = document.getElementById('globalPasswordInput').value;
-            
-            // --- LOGIC PASSWORD BARU UNTUK TEAM PERFORMANCE (2233) ---
-            if (AppState.pendingAction === 'teamPerformance') {
-                if (input === '2233') {
-                    AppState.isPasswordModalOpen = false;
-                    AppState.pendingAction = null;
-                    AppState.passwordError = false;
-                    
-                    // Redirect ke Dashboard Team Performance
-                    window.open('https://team-performance-two.vercel.app/', '_blank');
-                } else {
-                    AppState.passwordError = true;
-                }
-            } 
-            // --- LOGIC PASSWORD LAMA (1122) ---
-            else {
-                if (input === '1122') {
-                    AppState.isPasswordModalOpen = false;
-                    if (AppState.pendingAction === 'dashboard') {
-                        navAction('dashboard');
-                    } else if (AppState.pendingAction === 'projectMenu') {
-                        toggleProjectMenuAction();
-                    }
-                    AppState.pendingAction = null;
-                    AppState.passwordError = false;
-                } else {
-                    AppState.passwordError = true;
-                }
-            }
-            render();
-        };
-
-        // --- NEW ACTION: TEAM PERFORMANCE ---
-        const handleTeamPerformanceAccess = () => {
-            AppState.pendingAction = 'teamPerformance';
-            AppState.isPasswordModalOpen = true;
-            AppState.passwordError = false;
-            render();
-            setTimeout(() => document.getElementById('globalPasswordInput')?.focus(), 100);
-        };
-
-        // --- NEW: INVENTORY DATA FETCH ---
         const fetchInventoryDataAction = async () => {
             AppState.inventoryData.loading = true;
             render();
@@ -763,6 +607,119 @@
             XLSX.writeFile(workbook, `Part_Non_SOH_Report_${date}.xlsx`);
         };
 
+        // --- PERBAIKAN: MENAMBAHKAN KEMBALI FUNGSI DOWNLOAD YANG HILANG ---
+        const downloadPendingGRExcelAction = () => {
+            if (!AppState.fullPendingGR || AppState.fullPendingGR.length === 0) {
+                alert("Tidak ada data overdue untuk diunduh.");
+                return;
+            }
+            const dataToExport = AppState.fullPendingGR.map(item => ({
+                "Project Site": item.project, "STO Number": item.sto, "Tanggal Kirim": item.date, "Hari Sejak Kirim": item.days, "Status": "OVERDUE (> 30 Hari)"
+            }));
+            const worksheet = XLSX.utils.json_to_sheet(dataToExport);
+            const workbook = XLSX.utils.book_new();
+            XLSX.utils.book_append_sheet(workbook, worksheet, "Overdue GR");
+            XLSX.writeFile(workbook, `Overdue_GR_${new Date().toISOString().split('T')[0]}.xlsx`);
+        };
+
+        const downloadReminderGRExcelAction = () => {
+            if (!AppState.fullReminderGR || AppState.fullReminderGR.length === 0) {
+                alert("Tidak ada data reminder untuk diunduh.");
+                return;
+            }
+            const dataToExport = AppState.fullReminderGR.map(item => ({
+                "Project Site": item.project, "STO Number": item.sto, "Tanggal Kirim": item.date, "Hari Sejak Kirim": item.days, "Status": "WARNING (7-30 Hari)"
+            }));
+            const worksheet = XLSX.utils.json_to_sheet(dataToExport);
+            const workbook = XLSX.utils.book_new();
+            XLSX.utils.book_append_sheet(workbook, worksheet, "Reminder GR");
+            XLSX.writeFile(workbook, `Reminder_GR_${new Date().toISOString().split('T')[0]}.xlsx`);
+        };
+
+        const downloadOnTrackGRExcelAction = () => {
+            if (!AppState.fullOnTrackGR || AppState.fullOnTrackGR.length === 0) {
+                alert("Tidak ada data recent shipment untuk diunduh.");
+                return;
+            }
+            const dataToExport = AppState.fullOnTrackGR.map(item => ({
+                "Project Site": item.project, "STO Number": item.sto, "Tanggal Kirim": item.date, "Hari Sejak Kirim": item.days, "Status": "ON TRACK (< 7 Hari)"
+            }));
+            const worksheet = XLSX.utils.json_to_sheet(dataToExport);
+            const workbook = XLSX.utils.book_new();
+            XLSX.utils.book_append_sheet(workbook, worksheet, "On Track GR");
+            XLSX.writeFile(workbook, `OnTrack_GR_${new Date().toISOString().split('T')[0]}.xlsx`);
+        };
+
+        // --- PERBAIKAN: MENAMBAHKAN KEMBALI FUNGSI PASSWORD & AKSES YANG HILANG ---
+        const handleDashboardAccess = () => {
+            AppState.pendingAction = 'dashboard';
+            AppState.isPasswordModalOpen = true;
+            AppState.passwordError = false;
+            render();
+            setTimeout(() => document.getElementById('globalPasswordInput')?.focus(), 100);
+        };
+
+        const handleProjectMenuAccess = () => {
+            if (AppState.projectMenuOpen) {
+                toggleProjectMenuAction();
+                return;
+            }
+            AppState.pendingAction = 'projectMenu';
+            AppState.isPasswordModalOpen = true;
+            AppState.passwordError = false;
+            render();
+            setTimeout(() => document.getElementById('globalPasswordInput')?.focus(), 100);
+        };
+
+        const handleTeamPerformanceAccess = () => {
+            AppState.pendingAction = 'teamPerformance';
+            AppState.isPasswordModalOpen = true;
+            AppState.passwordError = false;
+            render();
+            setTimeout(() => document.getElementById('globalPasswordInput')?.focus(), 100);
+        };
+
+        const closePasswordModal = () => {
+            AppState.isPasswordModalOpen = false;
+            AppState.pendingAction = null;
+            AppState.passwordError = false;
+            render();
+        };
+
+        const submitGlobalPassword = (e) => {
+            e.preventDefault();
+            const input = document.getElementById('globalPasswordInput').value;
+            
+            // Logic Password Baru untuk Team Performance (2233)
+            if (AppState.pendingAction === 'teamPerformance') {
+                if (input === '2233') {
+                    AppState.isPasswordModalOpen = false;
+                    AppState.pendingAction = null;
+                    AppState.passwordError = false;
+                    window.open('https://team-performance-two.vercel.app/', '_blank');
+                } else {
+                    AppState.passwordError = true;
+                }
+            } 
+            // Logic Password Lama (1122)
+            else {
+                if (input === '1122') {
+                    AppState.isPasswordModalOpen = false;
+                    if (AppState.pendingAction === 'dashboard') {
+                        navAction('dashboard');
+                    } else if (AppState.pendingAction === 'projectMenu') {
+                        toggleProjectMenuAction();
+                    }
+                    AppState.pendingAction = null;
+                    AppState.passwordError = false;
+                } else {
+                    AppState.passwordError = true;
+                }
+            }
+            render();
+        };
+        // -----------------------------------------------------------------------
+
         const handleUnlockConstructionAction = (e) => {
             e.preventDefault();
             const input = document.getElementById('constructionPass').value;
@@ -822,7 +779,8 @@
             if (feature === 'utilization') {
                 AppState.dashboardMode = 'utilization';
                 AppState.utilizationYear = null; // Reset year on entry to show selection
-                if (AppState.dashboardData.length === 0 && AppState.rawUtilData.length === 0) {
+                // Cek apakah salah satu data sudah ada
+                if (AppState.dashboardData.length === 0 && (!AppState.rawUtilData2025 || AppState.rawUtilData2025.length === 0)) {
                     fetchDashboardDataAction();
                 } else {
                     render();
@@ -1970,9 +1928,13 @@
             }
 
             if (AppState.dashboardData.length === 0) {
-                 if (AppState.rawUtilData.length > 0) {
-                     // If raw data exists but processed data is empty, maybe strict filtering found nothing for this year
-                     // Just render empty state or process again (safety)
+                 // Check if raw data is ready for the selected year
+                 let rawReady = (AppState.utilizationYear == 2025 && AppState.rawUtilData2025.length > 0) || 
+                                (AppState.utilizationYear == 2026 && AppState.rawUtilData2026.length > 0);
+                 
+                 if (rawReady) {
+                     // Data ready but not processed yet, maybe re-trigger process?
+                     // Ideally processUtilizationData is called on selectUtilizationYear
                  } else {
                      // Loading
                      return '<div class="min-h-screen pt-24 flex justify-center items-center text-white"><i data-lucide="loader-2" class="animate-spin mr-2"></i> Loading Utilization Data...</div>';
