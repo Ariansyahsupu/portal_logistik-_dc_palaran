@@ -1,6 +1,6 @@
 <!-- 
     VERSION: DC Palaran Versi 1.1 
-    STATUS: STABLE & CONSOLIDATED + Monitoring In-Transit
+    STATUS: STABLE & CONSOLIDATED + Monitoring In-Transit + Auto SJ Viewer
 -->
 <!DOCTYPE html>
 <html lang="en">
@@ -146,7 +146,12 @@
             // Security State
             isPasswordModalOpen: false,
             pendingAction: null,
-            passwordError: false
+            passwordError: false,
+            // SJ Viewer State
+            sjModalOpen: false,
+            sjLoading: false,
+            sjImageData: null,
+            sjError: null
         };
 
         // --- 3. UTILITIES ---
@@ -648,6 +653,42 @@
             const workbook = XLSX.utils.book_new();
             XLSX.utils.book_append_sheet(workbook, worksheet, "On Track GR");
             XLSX.writeFile(workbook, `OnTrack_GR_${new Date().toISOString().split('T')[0]}.xlsx`);
+        };
+
+        // --- NEW: SJ Viewer Action ---
+        const handleViewSJAction = (sto) => {
+            AppState.sjModalOpen = true;
+            AppState.sjLoading = true;
+            AppState.sjImageData = null;
+            AppState.sjError = null;
+            render();
+
+            // Fetch image using Apps Script
+            // We use the same scriptUrl for both monitoring and SJ search
+            const scriptUrl = "https://script.google.com/macros/s/AKfycbzZBPstaYWUd344I71wu2YwEe5eWNz8SAim0VBRy5QpwHgyzGpWGXJxzpj-hOkQuQNP/exec";
+            
+            fetch(`${scriptUrl}?action=get_image&sto=${sto}`)
+                .then(res => res.json())
+                .then(data => {
+                    AppState.sjLoading = false;
+                    if (data.status === 'success' && data.imageUrl) {
+                        AppState.sjImageData = data.imageUrl;
+                    } else {
+                        AppState.sjError = "Surat Jalan tidak ditemukan.";
+                    }
+                    render();
+                })
+                .catch(err => {
+                    AppState.sjLoading = false;
+                    AppState.sjError = "Gagal memuat gambar.";
+                    console.error(err);
+                    render();
+                });
+        };
+
+        const closeSJModalAction = () => {
+            AppState.sjModalOpen = false;
+            render();
         };
 
         // --- PERBAIKAN: MENAMBAHKAN KEMBALI FUNGSI PASSWORD & AKSES YANG HILANG ---
@@ -1282,8 +1323,8 @@
             const generateList = (items, colorClass, textClass) => {
                 if (!items || items.length === 0) return `<div class="text-center p-4 text-slate-400 text-sm">No items found.</div>`;
                 return items.map(item => `
-                    <div class="${colorClass} p-3 rounded-lg border flex justify-between items-center mb-2 last:mb-0 mr-1">
-                        <div>
+                    <div class="${colorClass} p-3 rounded-lg border flex justify-between items-center mb-2 last:mb-0 mr-1 group relative">
+                        <div class="flex-1">
                             <div class="font-bold text-white text-sm">${item.project}</div>
                             <div class="text-xs ${textClass} opacity-80">STO: ${item.sto}</div>
                         </div>
@@ -1291,6 +1332,13 @@
                             <div class="font-bold ${textClass} text-lg">${item.days} Days</div>
                             <div class="text-[10px] ${textClass} opacity-70">Since ${item.date}</div>
                         </div>
+                        
+                        <!-- NEW: VIEW SJ BUTTON -->
+                        <button onclick="window.handleViewSJ('${item.sto}')" 
+                                class="absolute right-[-40px] top-1/2 -translate-y-1/2 bg-slate-700 hover:bg-slate-600 text-white p-2 rounded-lg opacity-0 group-hover:opacity-100 group-hover:right-2 transition-all duration-300 shadow-xl border border-slate-500" 
+                                title="Lihat Surat Jalan">
+                            <i data-lucide="eye" class="w-4 h-4"></i>
+                        </button>
                     </div>
                 `).join('');
             };
@@ -1368,6 +1416,31 @@
 
                     </div>
                 </div>`;
+        }
+
+        // --- NEW: SJ VIEWER MODAL ---
+        function renderSJModal() {
+            if (!AppState.sjModalOpen) return '';
+            
+            let contentHTML = '';
+            if (AppState.sjLoading) {
+                contentHTML = `<div class="flex flex-col items-center justify-center py-12"><i data-lucide="loader-2" class="w-12 h-12 text-orange-500 animate-spin mb-4"></i><p class="text-slate-400">Mencari Surat Jalan...</p></div>`;
+            } else if (AppState.sjError) {
+                contentHTML = `<div class="text-center py-8"><i data-lucide="alert-triangle" class="w-12 h-12 text-red-500 mx-auto mb-4"></i><p class="text-red-400 mb-2">${AppState.sjError}</p><p class="text-slate-500 text-sm">Pastikan foto sudah diupload di Drive dengan nama STO yang benar.</p></div>`;
+            } else if (AppState.sjImageData) {
+                contentHTML = `<div class="relative rounded-lg overflow-hidden border border-slate-700 bg-black"><img src="${AppState.sjImageData}" class="max-w-full max-h-[70vh] object-contain mx-auto"></div>`;
+            }
+
+            return `
+            <div class="fixed inset-0 z-[100] flex items-center justify-center bg-black/90 backdrop-blur-sm animate-in fade-in" onclick="window.closeSJModal()">
+                <div class="bg-slate-900 border border-slate-700 rounded-2xl p-6 max-w-4xl w-full mx-4 shadow-2xl relative" onclick="event.stopPropagation()">
+                    <div class="flex justify-between items-center mb-4">
+                        <h3 class="text-xl font-bold text-white flex items-center"><i data-lucide="file-text" class="w-5 h-5 mr-2 text-orange-500"></i> Preview Surat Jalan</h3>
+                        <button onclick="window.closeSJModal()" class="text-slate-400 hover:text-white transition-colors"><i data-lucide="x" class="w-6 h-6"></i></button>
+                    </div>
+                    ${contentHTML}
+                </div>
+            </div>`;
         }
 
   // --- 6. RENDERERS ---
@@ -2017,6 +2090,17 @@
                             </div>
                         </div>
                     </div>
+
+                    <!-- PERBAIKAN: MENAMPILKAN LINK SUMBER DATA (SESUAI INSTRUKSI) -->
+                    <div class="mt-8 text-center pt-6 border-t border-slate-800">
+                        <p class="text-xs text-slate-500 font-mono">
+                            Sumber Data (2025/2026): 
+                            <a href="https://docs.google.com/spreadsheets/d/e/2PACX-1vSgvF0NUSq_o9gV90IzgKGAeNiNu3I5KH0D8vde-hHHngl8Pw2HYvPGSdurUe_O0c9LM6aoApnG31TH/pubhtml?gid=867366339&single=true" target="_blank" class="text-orange-500 hover:text-orange-400 hover:underline">
+                                https://docs.google.com/spreadsheets/d/e/2PACX-1vSgvF0NUSq_o9gV90IzgKGAeNiNu3I5KH0D8vde-hHHngl8Pw2HYvPGSdurUe_O0c9LM6aoApnG31TH/pubhtml?gid=867366339
+                            </a>
+                        </p>
+                    </div>
+
                 </div>
             </div>`;
         }
@@ -2511,6 +2595,11 @@
             if (AppState.isPasswordModalOpen) {
                 root.insertAdjacentHTML('beforeend', renderPasswordModal());
             }
+            
+            // SJ Modal Rendering (NEW)
+            if (AppState.sjModalOpen) {
+                root.insertAdjacentHTML('beforeend', renderSJModal());
+            }
 
             renderIcons();
 
@@ -2626,6 +2715,10 @@
         window.handleTeamPerformanceAccess = handleTeamPerformanceAccess; // Expose new handler
         window.closePasswordModal = closePasswordModal;
         window.submitGlobalPassword = submitGlobalPassword;
+
+        // --- SJ VIEWER ACTIONS ---
+        window.handleViewSJ = handleViewSJAction;
+        window.closeSJModal = closeSJModalAction;
 
         // --- 9. INIT ---
         startImageSlider();
